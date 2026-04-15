@@ -1,0 +1,92 @@
+name: Post-Match Bot
+
+on:
+  schedule:
+    # Controlla ogni 15 minuti tra le 11:00 e le 24:00 UTC
+    - cron: '*/15 11-23 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Ignora finestra temporale'
+        required: false
+        default: 'false'
+        type: boolean
+      half_time:
+        description: 'Pubblica stats intervallo'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  post-match:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create data & visuals directories
+        run: mkdir -p data visuals
+
+      # Ripristina history da cache
+      - name: Restore history cache
+        uses: actions/cache@v4
+        with:
+          path: data/history.json
+          key: asromadata-history-${{ github.run_id }}
+          restore-keys: asromadata-history-
+
+      - name: Run post-match bot
+        env:
+          GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
+          IG_USER_ID:         ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN:    ${{ secrets.IG_ACCESS_TOKEN }}
+          X_API_KEY:          ${{ secrets.X_API_KEY }}
+          X_API_SECRET:       ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN:     ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET:    ${{ secrets.X_ACCESS_SECRET }}
+          X_BEARER_TOKEN:     ${{ secrets.X_BEARER_TOKEN }}
+          BSKY_HANDLE:        ${{ secrets.BSKY_HANDLE }}
+          BSKY_PASSWORD:      ${{ secrets.BSKY_PASSWORD }}
+          THREADS_ENABLED:    ${{ secrets.THREADS_ENABLED }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          THREADS_USER_ID:    ${{ secrets.THREADS_USER_ID }}
+          GH_TOKEN:           ${{ secrets.GH_PAT }}
+          GH_OWNER:           ${{ github.repository_owner }}
+          GH_REPO:            ${{ github.event.repository.name }}
+        run: |
+          FORCE_FLAG=""
+          HALF_FLAG=""
+          if [ "${{ github.event.inputs.force }}" == "true" ]; then FORCE_FLAG="--force"; fi
+          if [ "${{ github.event.inputs.half_time }}" == "true" ]; then HALF_FLAG="--half-time"; fi
+          python -m bot.post_match $FORCE_FLAG $HALF_FLAG
+
+      # Salva history aggiornata
+      - name: Save history cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: data/history.json
+          key: asromadata-history-${{ github.run_id }}
+
+      # Commit history.json nel repo per persistenza cross-run
+      - name: Commit updated history
+        if: success()
+        run: |
+          git config user.name  "ASRomaData Bot"
+          git config user.email "bot@asromadata.com"
+          git add data/history.json data/last_match.json || true
+          git diff --staged --quiet || git commit -m "bot: update history [skip ci]"
+          git push || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
