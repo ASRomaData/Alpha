@@ -1,0 +1,73 @@
+name: Initialize Historical Database
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_year:
+        description: 'Anno di inizio (default 2000)'
+        required: false
+        default: '2000'
+
+# ESEGUIRE UNA SOLA VOLTA per costruire il database storico completo.
+# Richiede ~20-30 minuti (scarica dati dal 2000 da football-data.co.uk da football-data.co.uk).
+
+jobs:
+  build-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+      - run: mkdir -p data visuals
+
+      - name: Build historical database
+        run: |
+          python -c "
+          from bot.update_history import build_historical_database
+          build_historical_database(start_year=${{ github.event.inputs.start_year || 2000 }})
+          print('Database storico costruito da football-data.co.uk')
+          "
+
+      - name: Generate historical charts
+        run: |
+          python -c "
+          from bot.update_history import load_history
+          from bot.generate_visuals import generate_points_history_chart
+
+          h = load_history()
+          ss = h.get('season_summary', {})
+          seasons = sorted(ss.values(), key=lambda x: x.get('season_start', 0))
+          pt_seasons = [s for s in seasons if 'points' in s]
+          if pt_seasons:
+              generate_points_history_chart(pt_seasons, filename='points_history_full.png')
+              print(f'Points chart: {len(pt_seasons)} stagioni')
+          else:
+              print('Nessuna stagione trovata')
+          "
+
+      - name: Commit history to repository
+        run: |
+          git config user.name  "ASRomaData Bot"
+          git config user.email "bot@asromadata.com"
+          git add data/ visuals/
+          git diff --staged --quiet || git commit -m "bot: initialize historical database [skip ci]"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload history artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: asromadata-history
+          path: |
+            data/history.json
+            visuals/xg_history_full.png
+            visuals/points_history_full.png
+          retention-days: 90
