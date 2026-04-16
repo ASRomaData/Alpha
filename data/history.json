@@ -1,21 +1,7 @@
 {
   "team": "AS Roma",
-  "last_updated": "",
-  "current_season": {
-    "season": "2024/25",
-    "games": 0,
-    "wins": 0,
-    "draws": 0,
-    "losses": 0,
-    "goals_for": 0,
-    "goals_against": 0,
-    "points": 0,
-    "xg_total": 0.0,
-    "xga_total": 0.0,
-    "ppg": 0.0,
-    "xg_per_game": 0.0,
-    "xga_per_game": 0.0
-  },
+  "last_updated": "2026-04-16T12:23:08.184192",
+  "current_season": {},
   "season_summary": {},
   "matches": [],
   "records": {
