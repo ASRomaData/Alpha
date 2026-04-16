@@ -333,52 +333,189 @@ def get_xg_form(team_id: int = ROMA_ID, last_n: int = 5) -> List[float]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# FOOTBALL-DATA.CO.UK — storico Serie A
+# STORICO SERIE A
+# Fonte primaria  : openfootball su GitHub (raw.githubusercontent.com)
+# Fonte secondaria: football-data.org API (richiede FD_API_KEY in .env)
 # ──────────────────────────────────────────────────────────────────────────────
 
-_FD_BASE = "https://www.football-data.co.uk/mmz4281"
-_FD_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept":          "text/html,application/xhtml+xml,*/*",
-    "Accept-Language": "en-US,en;q=0.9,it;q=0.8",
-    "Referer":         "https://www.football-data.co.uk/italy.php",
+import os
+import re
+
+# ── football-data.org ─────────────────────────────────────────────────────────
+_FDO_BASE    = "https://api.football-data.org/v4"
+_FDO_API_KEY = os.getenv("FD_API_KEY", "")          # gratuita su football-data.org
+_FDO_HEADERS = {"X-Auth-Token": _FDO_API_KEY}
+_FDO_LEAGUE  = "SA"                                  # Serie A
+
+
+def _fdo_get(path: str) -> Optional[Dict]:
+    """GET su football-data.org con gestione 429."""
+    if not _FDO_API_KEY:
+        return None
+    url = f"{_FDO_BASE}{path}"
+    for attempt in range(3):
+        try:
+            r = requests.get(url, headers=_FDO_HEADERS, timeout=20)
+            if r.status_code == 429:
+                time.sleep(60)          # free tier: 10 req/min
+                continue
+            if r.status_code in (403, 404):
+                return None
+            r.raise_for_status()
+            time.sleep(6)               # max ~10 req/min
+            return r.json()
+        except requests.RequestException as e:
+            logger.warning(f"football-data.org {path} attempt {attempt+1}: {e}")
+            if attempt < 2:
+                time.sleep(10)
+    return None
+
+
+def _fdo_season_matches(year: int) -> Optional[List[Dict]]:
+    """
+    Restituisce le partite Serie A di una stagione da football-data.org.
+    year = anno di inizio stagione (es. 2023 per 2023/24).
+    Formato risposta: lista di match dict con homeTeam, awayTeam, score, status.
+    """
+    data = _fdo_get(f"/competitions/{_FDO_LEAGUE}/matches?season={year}")
+    if not data:
+        return None
+    matches = data.get("matches", [])
+    if not matches:
+        return None
+
+    rows = []
+    for m in matches:
+        if m.get("status") != "FINISHED":
+            continue
+        home  = m.get("homeTeam", {}).get("name", "")
+        away  = m.get("awayTeam", {}).get("name", "")
+        score = m.get("score", {}).get("fullTime", {})
+        hg    = score.get("home")
+        ag    = score.get("away")
+        if hg is None or ag is None:
+            continue
+        ftr = "H" if hg > ag else ("A" if ag > hg else "D")
+        rows.append({
+            "HomeTeam": home, "AwayTeam": away,
+            "FTHG": str(hg), "FTAG": str(ag), "FTR": ftr,
+        })
+    return rows or None
+
+
+# ── openfootball su GitHub ────────────────────────────────────────────────────
+# Repo: https://github.com/openfootball/italy
+# Raw base: https://raw.githubusercontent.com/openfootball/italy/master/
+# File disponibili: 2011-12/it.1.txt, 2012-13/it.1.txt, …
+
+_OFB_RAW = (
+    "https://raw.githubusercontent.com/openfootball/italy/master"
+)
+
+# Mappa nomi openfootball → nomi football-data.co.uk (Roma invariata)
+_OFB_NAME_MAP = {
+    "Inter":           "Inter",
+    "Internazionale":  "Inter",
+    "AC Milan":        "AC Milan",
+    "Milan":           "AC Milan",
+    "Juventus":        "Juventus",
+    "Roma":            "Roma",
+    "Napoli":          "Napoli",
+    "Lazio":           "Lazio",
+    "Fiorentina":      "Fiorentina",
+    "Atalanta":        "Atalanta",
+    "Torino":          "Torino",
+    "Sampdoria":       "Sampdoria",
+    "Bologna":         "Bologna",
+    "Udinese":         "Udinese",
+    "Genoa":           "Genoa",
+    "Cagliari":        "Cagliari",
+    "Verona":          "Verona",
+    "Hellas Verona":   "Verona",
+    "Parma":           "Parma",
+    "Sassuolo":        "Sassuolo",
+    "Empoli":          "Empoli",
+    "Spezia":          "Spezia",
+    "Venezia":         "Venezia",
+    "Salernitana":     "Salernitana",
+    "Cremonese":       "Cremonese",
+    "Lecce":           "Lecce",
+    "Monza":           "Monza",
+    "Frosinone":       "Frosinone",
+    "Como":            "Como",
 }
 
+# Regex per linea partita: "  Juventus  2-1  Roma"
+_OFB_MATCH_RE = re.compile(
+    r"^\s{2,}(.+?)\s{2,}(\d+)-(\d+)\s{2,}(.+?)\s*$"
+)
+
+
+def _ofb_season_matches(year: int) -> Optional[List[Dict]]:
+    """
+    Scarica e parsa il file openfootball per la stagione year/year+1.
+    Disponibile dal 2011/12 in poi.
+    """
+    folder   = f"{year}-{str(year + 1)[-2:]}"
+    url      = f"{_OFB_RAW}/{folder}/it.1.txt"
+    try:
+        r = requests.get(url, timeout=20)
+        if r.status_code == 404:
+            logger.debug(f"openfootball: {folder} non trovato")
+            return None
+        r.raise_for_status()
+    except requests.RequestException as e:
+        logger.warning(f"openfootball {folder}: {e}")
+        return None
+
+    rows = []
+    for line in r.text.splitlines():
+        m = _OFB_MATCH_RE.match(line)
+        if not m:
+            continue
+        home_raw, hg_s, ag_s, away_raw = m.group(1), m.group(2), m.group(3), m.group(4)
+        home = _OFB_NAME_MAP.get(home_raw.strip(), home_raw.strip())
+        away = _OFB_NAME_MAP.get(away_raw.strip(), away_raw.strip())
+        hg, ag = int(hg_s), int(ag_s)
+        ftr = "H" if hg > ag else ("A" if ag > hg else "D")
+        rows.append({
+            "HomeTeam": home, "AwayTeam": away,
+            "FTHG": str(hg), "FTAG": str(ag), "FTR": ftr,
+        })
+
+    logger.info(f"openfootball {folder}: {len(rows)} partite")
+    return rows or None
+
+
+# ── Interfaccia pubblica (stessa firma di prima) ──────────────────────────────
 
 def download_season_csv(season_code: str) -> Optional[List[Dict]]:
     """
-    Scarica CSV stagione Serie A.
-    season_code: '2425' per 2024/25, '2324' per 2023/24, '0001' per 2000/01
-    
-    football-data.co.uk richiede un browser User-Agent o risponde 403.
-    Serie A = I1.csv (prima divisione italiana).
+    Scarica partite stagione Serie A.
+    season_code: '2425' → 2024/25, '1112' → 2011/12, ecc.
+    Tenta openfootball prima, poi football-data.org come fallback.
+    Restituisce lista di dict con chiavi HomeTeam/AwayTeam/FTHG/FTAG/FTR
+    (compatibile con season_record senza modifiche).
     """
-    url = f"{_FD_BASE}/{season_code}/I1.csv"
-    try:
-        r = requests.get(url, headers=_FD_HEADERS, timeout=20)
-        r.raise_for_status()
-        text   = r.content.decode("latin-1")
-        reader = csv.DictReader(io.StringIO(text))
-        rows   = [row for row in reader if row.get("HomeTeam", "").strip()]
-        logger.info(f"football-data {season_code}: {len(rows)} partite")
+    year = 2000 + int(season_code[:2])
+
+    # Primario: openfootball (GitHub raw, sempre raggiungibile)
+    if year >= 2011:
+        rows = _ofb_season_matches(year)
+        if rows:
+            return rows
+
+    # Fallback: football-data.org (richiede FD_API_KEY)
+    rows = _fdo_season_matches(year)
+    if rows:
         return rows
-    except requests.HTTPError as e:
-        if e.response.status_code == 404:
-            logger.debug(f"football-data {season_code}: non trovato (stagione non ancora disponibile)")
-        else:
-            logger.warning(f"football-data.co.uk {season_code}: HTTP {e.response.status_code}")
-        return None
-    except Exception as e:
-        logger.warning(f"football-data.co.uk {season_code}: {e}")
-        return None
+
+    logger.warning(f"download_season_csv: nessuna fonte disponibile per {season_code}")
+    return None
 
 
 def season_record(rows: List[Dict], team: str = "Roma") -> Optional[Dict]:
-    """Calcola record stagionale da CSV."""
+    """Calcola record stagionale da lista partite — invariato."""
     wins = draws = losses = gf = ga = 0
     for row in rows:
         home = row.get("HomeTeam", "").strip()
@@ -412,7 +549,11 @@ def season_record(rows: List[Dict], team: str = "Roma") -> Optional[Dict]:
 
 
 def build_full_history(start_year: int = 2000, team: str = "Roma") -> List[Dict]:
-    """Scarica storico completo Serie A dal start_year ad oggi."""
+    """
+    Storico completo Serie A.
+    - 2000–2010: solo football-data.org (openfootball non copre)
+    - 2011–oggi: openfootball primario, football-data.org fallback
+    """
     now      = datetime.utcnow()
     end_year = now.year if now.month >= 7 else now.year - 1
     history  = []
@@ -437,7 +578,6 @@ def build_full_history(start_year: int = 2000, team: str = "Roma") -> List[Dict]
 
 
 def get_h2h(rows: List[Dict], team_a: str = "Roma", team_b: str = "") -> Dict:
-    """H2H tra due squadre da CSV stagione."""
     a_wins = draws = b_wins = 0
     for row in rows:
         home = row.get("HomeTeam", "").strip()
@@ -459,6 +599,11 @@ def current_season_code() -> str:
     y   = now.year if now.month >= 7 else now.year - 1
     return f"{str(y)[-2:]}{str(y + 1)[-2:]}"
 
+
+# ── Alias di compatibilità ────────────────────────────────────────────────────
+fd_build_history   = build_full_history
+fd_season_record   = season_record
+fd_download_season = download_season_csv
 
 # ──────────────────────────────────────────────────────────────────────────────
 # TRANSFERMARKT — valore rosa (opzionale)
