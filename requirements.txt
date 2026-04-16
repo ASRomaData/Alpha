@@ -22,3 +22,4 @@ atproto>=0.0.46
 python-dateutil>=2.8.0
 pillow>=10.0.0
 python-dotenv>=1.0.0   # carica .env in sviluppo locale (opzionale in produzione)
+curl_cffi>=0.5.10
