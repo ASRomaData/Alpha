@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from bot.update_history import load_history, _current_season_label
-from bot.generate_visuals import generate_weekly_card, generate_points_history_chart
+from bot.generate_visuals import generate_weekly_card, generate_points_history
 from bot.ai_narrative import generate_weekly_narrative
 from bot.publishers import publish_to_all_platforms
 
@@ -91,9 +91,8 @@ def run_weekly_review():
         seasons = sorted(ss.values(), key=lambda s: s.get("season_start", 0))
         pt_seasons = [s for s in seasons if "points" in s]
         if len(pt_seasons) >= 3:
-            generate_points_history_chart(
+            generate_points_history(
                 pt_seasons,
-                title=f"AS Roma — Punti per stagione Serie A ({_current_season_label()})",
                 filename="points_weekly.png",
             )
     except Exception as e:
