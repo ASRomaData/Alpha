@@ -14,6 +14,8 @@ on:
 jobs:
   build-history:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     timeout-minutes: 60
 
     steps:
@@ -52,13 +54,14 @@ jobs:
               print('Nessuna stagione trovata')
           "
 
-      - name: Commit history to repository
+      - name: Commit and push
         run: |
           git config user.name  "ASRomaData Bot"
-          git config user.email "bot@asromadata.com"
-          git add data/ visuals/
-          git diff --staged --quiet || git commit -m "bot: initialize historical database [skip ci]"
-          git push
+          git config user.email "bot@asromadata.it"
+          git add data/history.json
+          git diff --staged --quiet && echo "Nessuna modifica" && exit 0
+          git commit -m "bot: initialize historical database [skip ci]"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
