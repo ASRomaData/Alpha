@@ -3,10 +3,10 @@ ASRomaData Bot — Data Fetching (FIXED Version)
 =================================
 Architettura a due fonti:
 
-1. SOFASCORE  — tutto ciò che riguarda le partite
+1. SOFASCORE  — tutto ciò che riguarda le partite (Fix: curl_cffi impersonate)
 2. FOOTBALL-DATA.CO.UK  — serie storiche Serie A dal 2000
 
-Fix: Migliorata gestione 403 tramite Session, Jitter e Modern Headers.
+Fix: Migliorata gestione 403 tramite curl_cffi (impersonate chrome) come bot.py.
 """
 
 import csv
@@ -19,35 +19,24 @@ import re
 from datetime import datetime
 from typing import Dict, List, Optional
 
-import requests
+# Utilizziamo curl_cffi per bypassare i blocchi 403
+from curl_cffi import requests as curl_requests
+import requests # Mantenuto per le API secondarie che non bloccano
 
 logger = logging.getLogger(__name__)
 
 ROMA_ID  = 2702
 _SS_BASE = "https://api.sofascore.com/api/v1"
 
-# Inizializziamo una sessione per mantenere i cookie (aiuta a evitare i 403)
-session = requests.Session()
-
-def get_ss_headers():
-    """Genera header dinamici per simulare un browser reale."""
-    return {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://www.sofascore.com/",
-        "Origin": "https://www.sofascore.com",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-site",
-        "Cache-Control": "no-cache",
-    }
+# Header presi dal bot.py funzionante
+HEADERS_SS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.sofascore.com/",
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SOFASCORE — base request
+# SOFASCORE — base request (FIXED)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _ss_get(path: str, retries: int = 5, delay: float = 3.0) -> Optional[Dict]:
@@ -55,11 +44,15 @@ def _ss_get(path: str, retries: int = 5, delay: float = 3.0) -> Optional[Dict]:
     
     for attempt in range(retries):
         try:
-            # Usiamo la sessione e aggiorniamo gli header ogni tentativo
-            r = session.get(url, headers=get_ss_headers(), timeout=20)
+            # impersonate="chrome110" è la chiave del successo in bot.py
+            r = curl_requests.get(url, headers=HEADERS_SS, impersonate="chrome110", timeout=20)
             
+            if r.status_code == 200:
+                # Piccolo ritardo jitter per sicurezza
+                time.sleep(random.uniform(0.5, 1.5))
+                return r.json()
+
             if r.status_code == 403:
-                # Se riceviamo 403, aumentiamo drasticamente il tempo di attesa (backoff esponenziale)
                 wait = (delay * (2 ** attempt)) + random.uniform(2, 5)
                 logger.warning(f"SofaScore 403 Forbidden — Tentativo {attempt+1}. Attendo {wait:.1f}s...")
                 time.sleep(wait)
@@ -76,11 +69,7 @@ def _ss_get(path: str, retries: int = 5, delay: float = 3.0) -> Optional[Dict]:
                 
             r.raise_for_status()
             
-            # Aggiungiamo un piccolo ritardo casuale dopo ogni successo per non sembrare un bot
-            time.sleep(delay + random.uniform(0.5, 1.5))
-            return r.json()
-            
-        except requests.RequestException as e:
+        except Exception as e:
             logger.warning(f"SofaScore {path} attempt {attempt+1}: {e}")
             if attempt < retries - 1:
                 time.sleep(delay * 2)
@@ -316,7 +305,7 @@ def get_team_form(team_id: int = ROMA_ID, last_n: int = 5) -> List[str]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# STORICO SERIE A
+# STORICO SERIE A (Mantenuto requests standard per football-data)
 # ──────────────────────────────────────────────────────────────────────────────
 
 _FDO_BASE    = "https://api.football-data.org/v4"
@@ -427,7 +416,7 @@ def build_full_history(start_year: int = 2000, team: str = "Roma") -> List[Dict]
     return history
 
 # ──────────────────────────────────────────────────────────────────────────────
-# TRANSFERMARKT (Richiede BeautifulSoup)
+# TRANSFERMARKT
 # ──────────────────────────────────────────────────────────────────────────────
 
 _TM_HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
