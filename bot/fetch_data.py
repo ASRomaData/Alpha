@@ -7,8 +7,8 @@ Architettura a due fonti:
    - Risultati, statistiche, xG (Opta), shot map con xG per tiro,
      player ratings, standings, forma squadra, prossima partita
 
-2. FOOTBALL-DATA.CO.UK  — serie storiche Serie A dal 2000:
-   - CSV scaricabile direttamente, zero login, zero API key
+2. FOOTBALL-DATA / OPENFOOTBALL — serie storiche Serie A dal 2000:
+   - CSV / raw text scaricabile direttamente, zero login, zero API key
 
 Niente FBref. Niente Understat. Una sola fonte live, una per lo storico.
 """
@@ -16,6 +16,8 @@ Niente FBref. Niente Understat. Una sola fonte live, una per lo storico.
 import csv
 import io
 import logging
+import os
+import re
 import time
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -24,33 +26,77 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-ROMA_ID  = 2702
-_SS_BASE = "https://api.sofascore.com/api/v1"
-_SS_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
-    ),
-    "Accept":          "application/json, text/plain, */*",
-    "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
-    "Referer":         "https://www.sofascore.com/",
-    "Origin":          "https://www.sofascore.com",
-}
+ROMA_ID          = 2702
+ROMA_FOTMOB_ID   = 8632   # AS Roma su FotMob (alias usato in pre_match.py)
+
+# ── SofaScore: usa www.sofascore.com/api/v1 (NON api.sofascore.com → 403) ─────
+# api.sofascore.com blocca le richieste senza cookie validi restituendo 403.
+# www.sofascore.com/api/v1 è lo stesso endpoint usato dal browser e accetta
+# richieste con i cookie di sessione ottenuti dalla homepage.
+_SS_BASE    = "https://www.sofascore.com/api/v1"
+_SS_SESSION: Optional[requests.Session] = None
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# SOFASCORE — base request
-# ──────────────────────────────────────────────────────────────────────────────
+def _get_ss_session() -> requests.Session:
+    """
+    Restituisce una sessione requests già inizializzata con cookie SofaScore.
+    Visita la homepage una volta per ricevere i cookie di sessione, poi usa
+    sec-fetch-site: same-origin per passare come richiesta browser legittima.
+    """
+    global _SS_SESSION
+    if _SS_SESSION is None:
+        s = requests.Session()
+        s.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept":             "application/json, text/plain, */*",
+            "Accept-Language":    "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Encoding":    "gzip, deflate, br",
+            "Referer":            "https://www.sofascore.com/",
+            "Origin":             "https://www.sofascore.com",
+            "sec-ch-ua":          '"Chromium";v="124","Google Chrome";v="124","Not-A.Brand";v="99"',
+            "sec-ch-ua-mobile":   "?0",
+            "sec-ch-ua-platform": '"macOS"',
+            "sec-fetch-dest":     "empty",
+            "sec-fetch-mode":     "cors",
+            "sec-fetch-site":     "same-origin",
+            "Cache-Control":      "no-cache",
+            "Pragma":             "no-cache",
+        })
+        try:
+            s.get("https://www.sofascore.com/", timeout=15)
+            logger.debug("SofaScore: sessione cookie inizializzata")
+        except Exception as e:
+            logger.warning(f"SofaScore: cookie init fallito (non critico): {e}")
+        _SS_SESSION = s
+    return _SS_SESSION
 
-def _ss_get(path: str, retries: int = 3, delay: float = 4.0) -> Optional[Dict]:
-    url = f"{_SS_BASE}{path}"
+
+def _ss_get(path: str, retries: int = 3, delay: float = 3.0) -> Optional[Dict]:
+    """GET verso www.sofascore.com/api/v1 con sessione cookie e retry."""
+    url     = f"{_SS_BASE}{path}"
+    session = _get_ss_session()
     for attempt in range(retries):
         try:
-            r = requests.get(url, headers=_SS_HEADERS, timeout=20)
+            r = session.get(url, timeout=20)
             if r.status_code == 429:
-                wait = delay * (attempt + 1) * 4
+                wait = delay * (attempt + 1) * 5
                 logger.warning(f"SofaScore 429 — attendo {wait:.0f}s")
                 time.sleep(wait)
+                continue
+            if r.status_code == 403:
+                # Rigenera la sessione e riprova (cookie scaduto)
+                logger.warning(
+                    f"SofaScore 403 su {path} (tentativo {attempt + 1}) "
+                    "— rigenero sessione"
+                )
+                global _SS_SESSION
+                _SS_SESSION = None
+                session = _get_ss_session()
+                time.sleep(delay * 3)
                 continue
             if r.status_code == 404:
                 return None
@@ -58,7 +104,7 @@ def _ss_get(path: str, retries: int = 3, delay: float = 4.0) -> Optional[Dict]:
             time.sleep(delay)
             return r.json()
         except requests.RequestException as e:
-            logger.warning(f"SofaScore {path} attempt {attempt+1}: {e}")
+            logger.warning(f"SofaScore {path} attempt {attempt + 1}: {e}")
             if attempt < retries - 1:
                 time.sleep(delay * 2)
     return None
@@ -97,24 +143,26 @@ def parse_event(event: Dict) -> Dict:
     is_home    = home_id == ROMA_ID
     start_ts   = event.get("startTimestamp", 0)
     return {
-        "match_id":    event.get("id"),
-        "home_team":   event.get("homeTeam", {}).get("name", ""),
-        "away_team":   event.get("awayTeam", {}).get("name", ""),
-        "home_score":  home_score,
-        "away_score":  away_score,
-        "roma_score":  home_score if is_home else away_score,
-        "opp_score":   away_score if is_home else home_score,
-        "opponent":    event.get("awayTeam", {}).get("name", "") if is_home else event.get("homeTeam", {}).get("name", ""),
-        "opponent_id": away_id if is_home else home_id,
-        "is_home":     is_home,
-        "competition": event.get("tournament", {}).get("name", ""),
+        "match_id":      event.get("id"),
+        "home_team":     event.get("homeTeam", {}).get("name", ""),
+        "away_team":     event.get("awayTeam", {}).get("name", ""),
+        "home_score":    home_score,
+        "away_score":    away_score,
+        "roma_score":    home_score if is_home else away_score,
+        "opp_score":     away_score if is_home else home_score,
+        "opponent":      event.get("awayTeam", {}).get("name", "") if is_home
+                         else event.get("homeTeam", {}).get("name", ""),
+        "opponent_id":   away_id if is_home else home_id,
+        "is_home":       is_home,
+        "competition":   event.get("tournament", {}).get("name", ""),
         "tournament_id": event.get("tournament", {}).get("id"),
-        "season_id":   event.get("season", {}).get("id"),
-        "round":       event.get("roundInfo", {}).get("round", ""),
-        "date":        datetime.utcfromtimestamp(start_ts).strftime("%d/%m/%Y") if start_ts else "",
-        "start_ts":    start_ts,
-        "status":      event.get("status", {}).get("type", ""),
-        "venue":       (event.get("venue") or {}).get("name", ""),
+        "season_id":     event.get("season", {}).get("id"),
+        "round":         event.get("roundInfo", {}).get("round", ""),
+        "date":          datetime.utcfromtimestamp(start_ts).strftime("%d/%m/%Y")
+                         if start_ts else "",
+        "start_ts":      start_ts,
+        "status":        event.get("status", {}).get("type", ""),
+        "venue":         (event.get("venue") or {}).get("name", ""),
     }
 
 
@@ -123,31 +171,29 @@ def parse_event(event: Dict) -> Dict:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def get_match_statistics(match_id: int) -> Optional[Dict]:
-    """Statistiche complete incluse Expected Goals (xG Opta)."""
     return _ss_get(f"/event/{match_id}/statistics")
 
 
-# Mappa nomi statistica SofaScore → chiavi del dict risultato
 _STAT_MAP = {
-    "Ball possession":           ("possession_roma",       "possession_opp"),
-    "Total shots":               ("shots_roma",            "shots_opp"),
-    "Shots on target":           ("shots_on_target_roma",  "shots_on_target_opp"),
-    "Passes":                    ("passes_roma",           "passes_opp"),
-    "Accurate passes":           ("passes_roma",           "passes_opp"),
-    "Corner kicks":              ("corners_roma",          "corners_opp"),
-    "Fouls":                     ("fouls_roma",            "fouls_opp"),
-    "Yellow cards":              ("yellow_roma",           "yellow_opp"),
-    "Red cards":                 ("red_roma",              "red_opp"),
-    "Expected goals":            ("xg_roma",               "xg_opp"),
-    "Expected Goals":            ("xg_roma",               "xg_opp"),
-    "xG":                        ("xg_roma",               "xg_opp"),
-    "Expected Goals on Target":  ("xgot_roma",             "xgot_opp"),
-    "Big chances":               ("big_chances_roma",      "big_chances_opp"),
-    "Big chances missed":        ("big_chances_missed_roma","big_chances_missed_opp"),
-    "Goalkeeper saves":          ("saves_roma",            "saves_opp"),
-    "Tackles":                   ("tackles_roma",          "tackles_opp"),
-    "Attacks":                   ("attacks_roma",          "attacks_opp"),
-    "Dangerous attacks":         ("dangerous_attacks_roma","dangerous_attacks_opp"),
+    "Ball possession":            ("possession_roma",          "possession_opp"),
+    "Total shots":                ("shots_roma",               "shots_opp"),
+    "Shots on target":            ("shots_on_target_roma",     "shots_on_target_opp"),
+    "Passes":                     ("passes_roma",              "passes_opp"),
+    "Accurate passes":            ("passes_roma",              "passes_opp"),
+    "Corner kicks":               ("corners_roma",             "corners_opp"),
+    "Fouls":                      ("fouls_roma",               "fouls_opp"),
+    "Yellow cards":               ("yellow_roma",              "yellow_opp"),
+    "Red cards":                  ("red_roma",                 "red_opp"),
+    "Expected goals":             ("xg_roma",                  "xg_opp"),
+    "Expected Goals":             ("xg_roma",                  "xg_opp"),
+    "xG":                         ("xg_roma",                  "xg_opp"),
+    "Expected Goals on Target":   ("xgot_roma",                "xgot_opp"),
+    "Big chances":                ("big_chances_roma",         "big_chances_opp"),
+    "Big chances missed":         ("big_chances_missed_roma",  "big_chances_missed_opp"),
+    "Goalkeeper saves":           ("saves_roma",               "saves_opp"),
+    "Tackles":                    ("tackles_roma",             "tackles_opp"),
+    "Attacks":                    ("attacks_roma",             "attacks_opp"),
+    "Dangerous attacks":          ("dangerous_attacks_roma",   "dangerous_attacks_opp"),
 }
 
 
@@ -175,15 +221,10 @@ def parse_match_statistics(raw: Dict, is_home_roma: bool) -> Dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SHOT MAP (xG per tiro + coordinate)
+# SHOT MAP
 # ──────────────────────────────────────────────────────────────────────────────
 
 def get_shot_map(match_id: int) -> Optional[List[Dict]]:
-    """
-    Shot map da SofaScore: tutti i tiri con xG (Opta) e coordinate (0-100).
-    Ogni tiro: {isHome, shotType, xg, xgot, playerCoordinates, time, player, bodyPart, situation}
-    shotType: 'goal' | 'save' | 'miss' | 'block' | 'post'
-    """
     data = _ss_get(f"/event/{match_id}/shotmap")
     return data.get("shotmap", []) if data else None
 
@@ -222,17 +263,17 @@ def get_player_ratings(match_id: int) -> Optional[List[Dict]]:
                 continue
             info = p.get("player", {})
             players.append({
-                "id":        info.get("id"),
-                "name":      info.get("name", ""),
-                "shortName": info.get("shortName", info.get("name", "")),
-                "side":      side,
-                "position":  p.get("position", ""),
-                "rating":    float(rating),
-                "goals":     stats.get("goals", 0) or 0,
-                "assists":   stats.get("goalAssist", 0) or 0,
-                "minutes":   stats.get("minutesPlayed", 0) or 0,
-                "shots":     stats.get("totalShots", 0) or 0,
-                "key_passes":stats.get("keyPass", 0) or 0,
+                "id":         info.get("id"),
+                "name":       info.get("name", ""),
+                "shortName":  info.get("shortName", info.get("name", "")),
+                "side":       side,
+                "position":   p.get("position", ""),
+                "rating":     float(rating),
+                "goals":      stats.get("goals", 0) or 0,
+                "assists":    stats.get("goalAssist", 0) or 0,
+                "minutes":    stats.get("minutesPlayed", 0) or 0,
+                "shots":      stats.get("totalShots", 0) or 0,
+                "key_passes": stats.get("keyPass", 0) or 0,
             })
 
     return sorted(players, key=lambda x: x["rating"], reverse=True)
@@ -242,7 +283,6 @@ def get_player_ratings(match_id: int) -> Optional[List[Dict]]:
 # STANDINGS
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Serie A su SofaScore: tournament_id = 23
 _SERIE_A_ID = 23
 
 
@@ -259,11 +299,9 @@ def get_standings(tournament_id: int = _SERIE_A_ID, season_id: int = None) -> Op
         season_id = get_current_season_id(tournament_id)
     if not season_id:
         return None
-
     data = _ss_get(f"/tournament/{tournament_id}/season/{season_id}/standings/total")
     if not data:
         return None
-
     rows = data.get("standings", [{}])[0].get("rows", [])
     return [{
         "position":      row.get("position"),
@@ -291,7 +329,6 @@ def get_roma_position(standings: List[Dict]) -> Optional[int]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def get_team_form(team_id: int = ROMA_ID, last_n: int = 5) -> List[str]:
-    """Forma W/D/L ultime N partite completate."""
     matches   = get_recent_matches(team_id, page=0)
     completed = [
         e for e in matches
@@ -299,21 +336,18 @@ def get_team_form(team_id: int = ROMA_ID, last_n: int = 5) -> List[str]:
     ]
     form = []
     for event in completed:
-        home_id    = event.get("homeTeam", {}).get("id")
-        is_home    = home_id == team_id
-        h_score    = event.get("homeScore", {}).get("current", 0)
-        a_score    = event.get("awayScore", {}).get("current", 0)
-        r_score    = h_score if is_home else a_score
-        o_score    = a_score if is_home else h_score
+        home_id = event.get("homeTeam", {}).get("id")
+        is_home = home_id == team_id
+        h_score = event.get("homeScore", {}).get("current", 0)
+        a_score = event.get("awayScore", {}).get("current", 0)
+        r_score = h_score if is_home else a_score
+        o_score = a_score if is_home else h_score
         form.append("W" if r_score > o_score else "D" if r_score == o_score else "L")
     return form[-last_n:]
 
 
 def get_xg_form(team_id: int = ROMA_ID, last_n: int = 5) -> List[float]:
-    """
-    xG Roma nelle ultime N partite completate.
-    Attenzione: fa N chiamate API — usa con rate limiting.
-    """
+    """xG Roma nelle ultime N partite. Nota: fa N chiamate API."""
     matches   = get_recent_matches(team_id, page=0)
     completed = [
         e for e in matches
@@ -333,23 +367,82 @@ def get_xg_form(team_id: int = ROMA_ID, last_n: int = 5) -> List[float]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# ALIAS PRE-MATCH: fotmob_* → SofaScore
+# pre_match.py importa questi nomi per compatibilità storica;
+# li reimplementiamo su SofaScore che ha gli stessi dati (o migliori).
+# ──────────────────────────────────────────────────────────────────────────────
+
+def sofascore_next_match() -> Optional[Dict]:
+    """Prossima partita Roma — SofaScore."""
+    event = get_next_match(ROMA_ID)
+    if not event:
+        return None
+    m = parse_event(event)
+    return {
+        "start_ts":    m["start_ts"],
+        "opponent":    m["opponent"],
+        "competition": m["competition"],
+        "date":        m["date"],
+    }
+
+
+def fotmob_get_next_match(team_id: int) -> Optional[Dict]:
+    """Alias → sofascore_next_match."""
+    return sofascore_next_match()
+
+
+def fotmob_get_form(team_id: int, n: int = 5) -> List[str]:
+    """Forma ultime N partite — dati SofaScore."""
+    return get_team_form(ROMA_ID, last_n=n)
+
+
+def fotmob_avg_xg_last_n(team_id: int, n: int = 5) -> float:
+    """xG medio ultime N partite — dati SofaScore."""
+    xg_list = get_xg_form(ROMA_ID, last_n=n)
+    return round(sum(xg_list) / len(xg_list), 2) if xg_list else 0.0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# H2H da storico openfootball / football-data.org
+# ──────────────────────────────────────────────────────────────────────────────
+
+def fd_h2h(opponent: str, last_n: int = 5) -> Dict:
+    """
+    H2H Roma vs avversario nelle ultime last_n stagioni da openfootball.
+    Restituisce {roma_wins, draws, opp_wins}.
+    """
+    now      = datetime.utcnow()
+    end_year = now.year if now.month >= 7 else now.year - 1
+    all_rows: List[Dict] = []
+
+    for year in range(max(end_year - last_n, 2011), end_year + 1):
+        code = f"{str(year)[-2:]}{str(year + 1)[-2:]}"
+        rows = download_season_csv(code)
+        if rows:
+            all_rows.extend(rows)
+        time.sleep(0.5)
+
+    h2h = get_h2h(all_rows, "Roma", opponent)
+    return {
+        "roma_wins": h2h["a_wins"],
+        "draws":     h2h["draws"],
+        "opp_wins":  h2h["b_wins"],
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # STORICO SERIE A
 # Fonte primaria  : openfootball su GitHub (raw.githubusercontent.com)
 # Fonte secondaria: football-data.org API (richiede FD_API_KEY in .env)
 # ──────────────────────────────────────────────────────────────────────────────
 
-import os
-import re
-
-# ── football-data.org ─────────────────────────────────────────────────────────
 _FDO_BASE    = "https://api.football-data.org/v4"
-_FDO_API_KEY = os.getenv("FD_API_KEY", "")          # gratuita su football-data.org
+_FDO_API_KEY = os.getenv("FD_API_KEY", "")
 _FDO_HEADERS = {"X-Auth-Token": _FDO_API_KEY}
-_FDO_LEAGUE  = "SA"                                  # Serie A
+_FDO_LEAGUE  = "SA"
 
 
 def _fdo_get(path: str) -> Optional[Dict]:
-    """GET su football-data.org con gestione 429."""
     if not _FDO_API_KEY:
         return None
     url = f"{_FDO_BASE}{path}"
@@ -357,26 +450,21 @@ def _fdo_get(path: str) -> Optional[Dict]:
         try:
             r = requests.get(url, headers=_FDO_HEADERS, timeout=20)
             if r.status_code == 429:
-                time.sleep(60)          # free tier: 10 req/min
+                time.sleep(60)
                 continue
             if r.status_code in (403, 404):
                 return None
             r.raise_for_status()
-            time.sleep(6)               # max ~10 req/min
+            time.sleep(6)
             return r.json()
         except requests.RequestException as e:
-            logger.warning(f"football-data.org {path} attempt {attempt+1}: {e}")
+            logger.warning(f"football-data.org {path} attempt {attempt + 1}: {e}")
             if attempt < 2:
                 time.sleep(10)
     return None
 
 
 def _fdo_season_matches(year: int) -> Optional[List[Dict]]:
-    """
-    Restituisce le partite Serie A di una stagione da football-data.org.
-    year = anno di inizio stagione (es. 2023 per 2023/24).
-    Formato risposta: lista di match dict con homeTeam, awayTeam, score, status.
-    """
     data = _fdo_get(f"/competitions/{_FDO_LEAGUE}/matches?season={year}")
     if not data:
         return None
@@ -404,60 +492,47 @@ def _fdo_season_matches(year: int) -> Optional[List[Dict]]:
 
 
 # ── openfootball su GitHub ────────────────────────────────────────────────────
-# Repo: https://github.com/openfootball/italy
-# Raw base: https://raw.githubusercontent.com/openfootball/italy/master/
-# File disponibili: 2011-12/it.1.txt, 2012-13/it.1.txt, …
 
-_OFB_RAW = (
-    "https://raw.githubusercontent.com/openfootball/italy/master"
-)
+_OFB_RAW = "https://raw.githubusercontent.com/openfootball/italy/master"
 
-# Mappa nomi openfootball → nomi football-data.co.uk (Roma invariata)
 _OFB_NAME_MAP = {
-    "Inter":           "Inter",
-    "Internazionale":  "Inter",
-    "AC Milan":        "AC Milan",
-    "Milan":           "AC Milan",
-    "Juventus":        "Juventus",
-    "Roma":            "Roma",
-    "Napoli":          "Napoli",
-    "Lazio":           "Lazio",
-    "Fiorentina":      "Fiorentina",
-    "Atalanta":        "Atalanta",
-    "Torino":          "Torino",
-    "Sampdoria":       "Sampdoria",
-    "Bologna":         "Bologna",
-    "Udinese":         "Udinese",
-    "Genoa":           "Genoa",
-    "Cagliari":        "Cagliari",
-    "Verona":          "Verona",
-    "Hellas Verona":   "Verona",
-    "Parma":           "Parma",
-    "Sassuolo":        "Sassuolo",
-    "Empoli":          "Empoli",
-    "Spezia":          "Spezia",
-    "Venezia":         "Venezia",
-    "Salernitana":     "Salernitana",
-    "Cremonese":       "Cremonese",
-    "Lecce":           "Lecce",
-    "Monza":           "Monza",
-    "Frosinone":       "Frosinone",
-    "Como":            "Como",
+    "Inter":          "Inter",
+    "Internazionale": "Inter",
+    "AC Milan":       "AC Milan",
+    "Milan":          "AC Milan",
+    "Juventus":       "Juventus",
+    "Roma":           "Roma",
+    "Napoli":         "Napoli",
+    "Lazio":          "Lazio",
+    "Fiorentina":     "Fiorentina",
+    "Atalanta":       "Atalanta",
+    "Torino":         "Torino",
+    "Sampdoria":      "Sampdoria",
+    "Bologna":        "Bologna",
+    "Udinese":        "Udinese",
+    "Genoa":          "Genoa",
+    "Cagliari":       "Cagliari",
+    "Verona":         "Verona",
+    "Hellas Verona":  "Verona",
+    "Parma":          "Parma",
+    "Sassuolo":       "Sassuolo",
+    "Empoli":         "Empoli",
+    "Spezia":         "Spezia",
+    "Venezia":        "Venezia",
+    "Salernitana":    "Salernitana",
+    "Cremonese":      "Cremonese",
+    "Lecce":          "Lecce",
+    "Monza":          "Monza",
+    "Frosinone":      "Frosinone",
+    "Como":           "Como",
 }
 
-# Regex per linea partita: "  Juventus  2-1  Roma"
-_OFB_MATCH_RE = re.compile(
-    r"^\s{2,}(.+?)\s{2,}(\d+)-(\d+)\s{2,}(.+?)\s*$"
-)
+_OFB_MATCH_RE = re.compile(r"^\s{2,}(.+?)\s{2,}(\d+)-(\d+)\s{2,}(.+?)\s*$")
 
 
 def _ofb_season_matches(year: int) -> Optional[List[Dict]]:
-    """
-    Scarica e parsa il file openfootball per la stagione year/year+1.
-    Disponibile dal 2011/12 in poi.
-    """
-    folder   = f"{year}-{str(year + 1)[-2:]}"
-    url      = f"{_OFB_RAW}/{folder}/it.1.txt"
+    folder = f"{year}-{str(year + 1)[-2:]}"
+    url    = f"{_OFB_RAW}/{folder}/it.1.txt"
     try:
         r = requests.get(url, timeout=20)
         if r.status_code == 404:
@@ -487,35 +562,28 @@ def _ofb_season_matches(year: int) -> Optional[List[Dict]]:
     return rows or None
 
 
-# ── Interfaccia pubblica (stessa firma di prima) ──────────────────────────────
-
 def download_season_csv(season_code: str) -> Optional[List[Dict]]:
     """
     Scarica partite stagione Serie A.
     season_code: '2425' → 2024/25, '1112' → 2011/12, ecc.
-    Tenta openfootball prima, poi football-data.org come fallback.
-    Restituisce lista di dict con chiavi HomeTeam/AwayTeam/FTHG/FTAG/FTR
-    (compatibile con season_record senza modifiche).
+    Tenta openfootball (GitHub), poi football-data.org come fallback.
     """
     year = 2000 + int(season_code[:2])
 
-    # Primario: openfootball (GitHub raw, sempre raggiungibile)
     if year >= 2011:
         rows = _ofb_season_matches(year)
         if rows:
             return rows
 
-    # Fallback: football-data.org (richiede FD_API_KEY)
     rows = _fdo_season_matches(year)
     if rows:
         return rows
 
-    logger.warning(f"download_season_csv: nessuna fonte disponibile per {season_code}")
+    logger.warning(f"download_season_csv: nessuna fonte per {season_code}")
     return None
 
 
 def season_record(rows: List[Dict], team: str = "Roma") -> Optional[Dict]:
-    """Calcola record stagionale da lista partite — invariato."""
     wins = draws = losses = gf = ga = 0
     for row in rows:
         home = row.get("HomeTeam", "").strip()
@@ -527,12 +595,12 @@ def season_record(rows: List[Dict], team: str = "Roma") -> Optional[Dict]:
             continue
         if home == team:
             gf += hg; ga += ag
-            if ftr == "H": wins += 1
+            if ftr == "H":   wins += 1
             elif ftr == "D": draws += 1
             elif ftr == "A": losses += 1
         elif away == team:
             gf += ag; ga += hg
-            if ftr == "A": wins += 1
+            if ftr == "A":   wins += 1
             elif ftr == "D": draws += 1
             elif ftr == "H": losses += 1
 
@@ -543,17 +611,12 @@ def season_record(rows: List[Dict], team: str = "Roma") -> Optional[Dict]:
         "games": games, "wins": wins, "draws": draws, "losses": losses,
         "goals_for": gf, "goals_against": ga,
         "goal_diff": gf - ga,
-        "points": wins * 3 + draws,
-        "ppg": round((wins * 3 + draws) / games, 3),
+        "points":    wins * 3 + draws,
+        "ppg":       round((wins * 3 + draws) / games, 3),
     }
 
 
 def build_full_history(start_year: int = 2000, team: str = "Roma") -> List[Dict]:
-    """
-    Storico completo Serie A.
-    - 2000–2010: solo football-data.org (openfootball non copre)
-    - 2011–oggi: openfootball primario, football-data.org fallback
-    """
     now      = datetime.utcnow()
     end_year = now.year if now.month >= 7 else now.year - 1
     history  = []
@@ -600,19 +663,12 @@ def current_season_code() -> str:
     return f"{str(y)[-2:]}{str(y + 1)[-2:]}"
 
 
-# ── Alias di compatibilità ────────────────────────────────────────────────────
-fd_build_history   = build_full_history
-fd_season_record   = season_record
-fd_download_season = download_season_csv
-
-# ──────────────────────────────────────────────────────────────────────────────
-# TRANSFERMARKT — valore rosa (opzionale)
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Transfermarkt ─────────────────────────────────────────────────────────────
 
 _TM_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+    "User-Agent":      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.transfermarkt.com/",
+    "Referer":         "https://www.transfermarkt.com/",
 }
 
 
@@ -624,7 +680,7 @@ def get_squad_value() -> Optional[Dict]:
             headers=_TM_HEADERS, timeout=20
         )
         r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
+        soup      = BeautifulSoup(r.text, "html.parser")
         total_el  = soup.select_one(".right.dark")
         top_row   = soup.select_one(".items tbody tr")
         top_player = {}
@@ -642,7 +698,9 @@ def get_squad_value() -> Optional[Dict]:
         logger.warning(f"Transfermarkt: {e}")
         return None
 
-# ── Alias di compatibilità (update_history.py usa questi nomi) ───────────────
-fd_build_history = build_full_history
-fd_season_record = season_record
+
+# ── Alias di compatibilità ────────────────────────────────────────────────────
+fd_build_history   = build_full_history
+fd_season_record   = season_record
 fd_download_season = download_season_csv
+fd_h2h_record      = fd_h2h
