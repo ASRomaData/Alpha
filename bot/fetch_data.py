@@ -496,3 +496,8 @@ def get_squad_value() -> Optional[Dict]:
     except Exception as e:
         logger.warning(f"Transfermarkt: {e}")
         return None
+
+# ── Alias di compatibilità (update_history.py usa questi nomi) ───────────────
+fd_build_history = build_full_history
+fd_season_record = season_record
+fd_download_season = download_season_csv
