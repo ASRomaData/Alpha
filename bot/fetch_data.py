@@ -178,6 +178,18 @@ def get_player_ratings(match_id: int) -> Optional[List[Dict]]:
             })
     return sorted(players, key=lambda x: x["rating"], reverse=True)
 
+def split_shots(shotmap: List[Dict], is_home_roma: bool) -> Dict:
+    """Split shotmap into Roma shots and opponent shots."""
+    roma_shots = [s for s in shotmap if s.get("isHome") == is_home_roma]
+    opp_shots  = [s for s in shotmap if s.get("isHome") != is_home_roma]
+    return {"roma": roma_shots, "opp": opp_shots}
+
+
+def xg_from_shots(shots: List[Dict]) -> Dict:
+    """Sum xG values from a list of shots."""
+    total = sum(float(s.get("xg", 0) or 0) for s in shots)
+    return {"xg": round(total, 2)}
+
 # ──────────────────────────────────────────────────────────────────────────────
 # STORICO SERIE A (Usa requests standard)
 # ──────────────────────────────────────────────────────────────────────────────
