@@ -20,13 +20,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 # Gestione robusta import curl_cffi
-try:
-    from curl_cffi import requests as curl_requests
-    CURL_AVAILABLE = True
-except ImportError:
-    import requests
-    CURL_AVAILABLE = False
-    print("WARNING: curl_cffi non trovato. Uso requests standard (rischio 403).")
+from curl_cffi import requests as curl_requests
 
 logger = logging.getLogger(__name__)
 
@@ -148,14 +142,17 @@ _STAT_MAP = {
 def parse_match_statistics(raw: Dict, is_home_roma: bool) -> Dict:
     result = {k: 0 for pair in _STAT_MAP.values() for k in pair}
     for period in raw.get("statistics", []):
-        for item in period.get("statisticsItems", []):
-            name = item.get("name", "")
-            if name in _STAT_MAP:
-                r_key, o_key = _STAT_MAP[name]
-                h_val = float(str(item.get("homeValue", "0")).replace("%",""))
-                a_val = float(str(item.get("awayValue", "0")).replace("%",""))
-                result[r_key] = h_val if is_home_roma else a_val
-                result[o_key] = a_val if is_home_roma else h_val
+        if period.get("period") != "ALL":
+            continue
+        for group in period.get("groups", []):          # ← add this level
+            for item in group.get("statisticsItems", []):
+                name = item.get("name", "")
+                if name in _STAT_MAP:
+                    r_key, o_key = _STAT_MAP[name]
+                    h_val = float(str(item.get("homeValue", "0")).replace("%", ""))
+                    a_val = float(str(item.get("awayValue", "0")).replace("%", ""))
+                    result[r_key] = h_val if is_home_roma else a_val
+                    result[o_key] = a_val if is_home_roma else h_val
     return result
 
 # ──────────────────────────────────────────────────────────────────────────────
