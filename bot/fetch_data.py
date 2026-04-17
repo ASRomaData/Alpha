@@ -192,7 +192,7 @@ def download_season_csv(season_code: str) -> Optional[List[Dict]]:
         return list(reader)
     except: return None
 
-def build_full_history(start_year: int = 2000, team: str = \"Roma\") -> List[Dict]:
+def build_full_history(start_year: int = 2000, team: str = "Roma") -> List[Dict]:
     history = []
     # Logica per scaricare anni passati...
     return history
