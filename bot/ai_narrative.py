@@ -239,6 +239,10 @@ def generate_pre_match_text(
     opp_form: List[str],
     roma_avg_xg: float = 0,
     opp_avg_xg: float = 0,
+    roma_avg_xga: float = 0,
+    opp_avg_xga: float = 0,
+    roma_avg_shots: float = 0,
+    opp_avg_shots: float = 0,
     h2h_record: Optional[Dict] = None,
 ) -> Dict[str, str]:
     """
@@ -257,14 +261,15 @@ Domani: AS Roma vs {opponent} — {competition} ({match_date})
 Dati:
 - Forma Roma (ult 5): {' '.join(roma_form[-5:])} → {roma_pts}/15 punti
 - Forma {opponent} (ult 5): {' '.join(opp_form[-5:])} → {opp_pts}/15 punti
-- xG medio Roma: {roma_avg_xg:.2f}/partita
-- xG medio {opponent}: {opp_avg_xg:.2f}/partita
+- xG medio Roma: {roma_avg_xg:.2f}/partita | xGA medio Roma: {roma_avg_xga:.2f}/partita
+- xG medio {opponent}: {opp_avg_xg:.2f}/partita | xGA medio {opponent}: {opp_avg_xga:.2f}/partita
+- Tiri medi Roma: {roma_avg_shots:.1f}/partita | Tiri medi {opponent}: {opp_avg_shots:.1f}/partita
 {h2h_str}
 
 Genera:
 THREAD (3 tweet separati da ---):
 - Tweet 1 (max 270 char): presentazione sfida con forma e dato più interessante
-- Tweet 2 (max 270 char): analisi xG e chi parte favorito secondo i numeri
+- Tweet 2 (max 270 char): analisi xG/xGA e chi parte favorito secondo i numeri
 - Tweet 3 (max 270 char): dato storico H2H o record e attesa tattica
 
 CAPTION (max 250 char + hashtag): insight pre-gara per Instagram
