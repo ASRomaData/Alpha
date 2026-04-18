@@ -1,0 +1,18 @@
+{
+  "last_match_id": 13981742,
+  "last_match_date": "10/04/2026",
+  "last_match_label": "Roma 3-0 Pisa",
+  "published_at": "2026-04-18T09:30:48.443019",
+  "results": {
+    "x": {
+      "published": false,
+      "tweet_ids": []
+    },
+    "bluesky": {
+      "published": true
+    },
+    "threads": {
+      "published": false
+    }
+  }
+}
