@@ -35,6 +35,49 @@ HEADERS_SS = {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
+# SOFASCORE — team form for prematch preview
+# ──────────────────────────────────────────────────────────────────────────────
+
+def get_form(team_id: int = ROMA_ID, n: int = 5) -> List[str]:
+    """Last N results as W/D/L from SofaScore."""
+    matches = get_recent_matches(team_id, page=0)
+    form = []
+    for event in matches[-n:]:
+        parsed = parse_event(event)
+        if parsed["status"] not in ("finished", "ended", "afterpenalties", "aet"):
+            continue
+        rs = parsed["roma_score"]
+        os_ = parsed["opp_score"]
+        if rs > os_:
+            form.append("W")
+        elif rs == os_:
+            form.append("D")
+        else:
+            form.append("L")
+    return form[-n:]
+
+
+def get_avg_xg(team_id: int = ROMA_ID, n: int = 5) -> float:
+    """Average xG for Roma over last N finished matches from SofaScore statistics."""
+    matches = get_recent_matches(team_id, page=0)
+    xg_vals = []
+    for event in matches:
+        parsed = parse_event(event)
+        if parsed["status"] not in ("finished", "ended", "afterpenalties", "aet"):
+            continue
+        raw = get_match_statistics(parsed["match_id"])
+        if not raw:
+            continue
+        stats = parse_match_statistics(raw, parsed["is_home"])
+        xg = stats.get("xg_roma", 0.0)
+        if xg:
+            xg_vals.append(float(xg))
+        if len(xg_vals) >= n:
+            break
+        time.sleep(random.uniform(0.5, 1.0))
+    return round(sum(xg_vals) / len(xg_vals), 2) if xg_vals else 0.0
+    
+# ──────────────────────────────────────────────────────────────────────────────
 # SOFASCORE — base request
 # ──────────────────────────────────────────────────────────────────────────────
 
