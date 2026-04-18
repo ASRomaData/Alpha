@@ -204,17 +204,25 @@ def get_player_ratings(match_id: int) -> Optional[List[Dict]]:
 FINISHED_STATUSES = ("finished", "ended", "afterpenalties", "aet")
 
 
-def get_team_form_stats(team_id: int, n: int = 5) -> Dict:
+def get_team_form_stats(team_id: int, n: int = 5, competition_filter: str = "Serie A") -> Dict:
     """
     Returns form, avg xG, avg xGA, avg shots for/against
-    for any team over last N finished matches from SofaScore.
+    for any team over last N finished Serie A matches from SofaScore.
     """
     matches = get_recent_matches(team_id, page=0)
+    # Reverse so we process most recent first
+    matches = list(reversed(matches))
+
     form = []
     xg_vals, xga_vals, shots_for, shots_against = [], [], [], []
 
     for event in matches:
         parsed = parse_event(event, team_id=team_id)
+
+        # Only Serie A
+        if competition_filter and competition_filter.lower() not in parsed.get("competition", "").lower():
+            continue
+
         if parsed["status"] not in FINISHED_STATUSES:
             continue
 
@@ -238,7 +246,7 @@ def get_team_form_stats(team_id: int, n: int = 5) -> Dict:
     def avg(lst): return round(sum(lst) / len(lst), 2) if lst else 0.0
 
     return {
-        "form":               form[-n:],
+        "form":               form[:n],
         "avg_xg":             avg(xg_vals),
         "avg_xga":            avg(xga_vals),
         "avg_shots_for":      avg(shots_for),
