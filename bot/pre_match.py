@@ -2,7 +2,7 @@
 ASRomaData Bot — Pre-Match Preview
 Trigger: cron ogni giorno 09:00 UTC.
 Pubblica se c'è una partita Roma entro le prossime 48h.
-Dati: Fotmob (form, xG medio) + football-data.co.uk (H2H storico).
+Dati: SofaScore (form, xG medio) + football-data.co.uk (H2H storico).
 """
 
 import logging
@@ -10,9 +10,12 @@ import sys
 from datetime import datetime
 
 from bot.fetch_data import (
-    fotmob_get_next_match, fotmob_get_form, fotmob_avg_xg_last_n,
-    fd_h2h, sofascore_next_match,
-    ROMA_FOTMOB_ID,
+    ROMA_ID,
+    get_next_match,
+    parse_event,
+    get_form,
+    get_avg_xg,
+    fd_h2h,
 )
 from bot.generate_visuals import generate_form_chart
 from bot.ai_narrative import generate_pre_match_text
@@ -25,16 +28,14 @@ logger = logging.getLogger(__name__)
 def run_pre_match():
     logger.info("═══ ASRomaData Bot — Pre-Match ═══")
 
-    # ── 1. Prossima partita ───────────────────────────────────────
-    next_match = fotmob_get_next_match(ROMA_FOTMOB_ID)
-    if not next_match:
-        logger.info("Fotmob: nessuna partita imminente. Provo SofaScore...")
-        next_match = sofascore_next_match()
-
-    if not next_match:
+    # ── 1. Prossima partita da SofaScore ─────────────────────────
+    logger.info("SofaScore: prossima partita Roma...")
+    event = get_next_match(ROMA_ID)
+    if not event:
         logger.info("Nessuna partita trovata. Skip.")
         sys.exit(0)
 
+    next_match  = parse_event(event)
     start_ts    = next_match.get("start_ts", 0)
     hours_until = (start_ts - datetime.utcnow().timestamp()) / 3600
 
@@ -48,24 +49,21 @@ def run_pre_match():
     logger.info(f"Preview: Roma vs {opponent} ({date_str}) — tra {hours_until:.0f}h")
 
     # ── 2. Forma Roma (ultimi 5 risultati) ────────────────────────
-    logger.info("Fotmob: forma Roma...")
-    roma_form = fotmob_get_form(ROMA_FOTMOB_ID, n=5)
+    logger.info("SofaScore: forma Roma...")
+    roma_form = get_form(ROMA_ID, n=5)
     logger.info(f"Forma Roma: {roma_form}")
+    opp_form = ["?"] * 5  # opponent form requires their team_id; best-effort placeholder
 
-    # Forma avversario (best-effort — Fotmob richiede team_id)
-    # Usiamo placeholder se non abbiamo l'id dell'avversario
-    opp_form = ["?"] * 5
-
-    # ── 3. xG medio Roma ultimi 5 (2 chiamate API Fotmob) ─────────
-    logger.info("Fotmob: xG medio ultimi 5...")
+    # ── 3. xG medio Roma ultimi 5 ────────────────────────────────
+    logger.info("SofaScore: xG medio ultimi 5...")
     roma_avg_xg = 0.0
     try:
-        roma_avg_xg = fotmob_avg_xg_last_n(ROMA_FOTMOB_ID, n=5)
+        roma_avg_xg = get_avg_xg(ROMA_ID, n=5)
         logger.info(f"xG medio Roma: {roma_avg_xg:.2f}")
     except Exception as e:
         logger.warning(f"xG medio failed: {e}")
 
-    # ── 4. H2H da football-data.co.uk (ultimi 5 anni) ─────────────
+    # ── 4. H2H da football-data.co.uk ────────────────────────────
     logger.info("football-data.co.uk: H2H storico...")
     h2h = None
     try:
