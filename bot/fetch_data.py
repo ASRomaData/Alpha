@@ -43,11 +43,7 @@ def _ss_get(path: str, retries: int = 5, delay: float = 3.0) -> Optional[Dict]:
     
     for attempt in range(retries):
         try:
-            if CURL_AVAILABLE:
-                # Usa impersonate per bypassare i blocchi come in bot.py
-                r = curl_requests.get(url, headers=HEADERS_SS, impersonate="chrome110", timeout=20)
-            else:
-                r = requests.get(url, headers=HEADERS_SS, timeout=20)
+           r = curl_requests.get(url, headers=HEADERS_SS, impersonate="chrome110", timeout=20)
             
             if r.status_code == 200:
                 time.sleep(random.uniform(0.5, 1.5))
