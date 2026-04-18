@@ -242,7 +242,43 @@ def download_season_csv(season_code: str) -> Optional[List[Dict]]:
         reader = csv.DictReader(io.StringIO(res.text))
         return list(reader)
     except: return None
+        
+def fd_h2h(opponent: str, last_n: int = 5) -> Dict:
+    """Head-to-head record Roma vs opponent from football-data.co.uk."""
+    roma_wins = draws = opp_wins = 0
+    matched = 0
+    opponent_lower = opponent.lower()
 
+    current_year = datetime.utcnow().year
+    for y in range(current_year - 1, current_year - 7, -1):
+        if matched >= last_n:
+            break
+        code = f"{str(y)[-2:]}{str(y + 1)[-2:]}"
+        rows = download_season_csv(code)
+        if not rows:
+            continue
+        for row in rows:
+            home = row.get("HomeTeam", "").lower()
+            away = row.get("AwayTeam", "").lower()
+            if "roma" not in (home, away):
+                continue
+            if opponent_lower not in (home, away):
+                continue
+            ftr = row.get("FTR", "")
+            is_home_roma = "roma" in home
+            if ftr == "H":
+                if is_home_roma: roma_wins += 1
+                else: opp_wins += 1
+            elif ftr == "A":
+                if is_home_roma: opp_wins += 1
+                else: roma_wins += 1
+            elif ftr == "D":
+                draws += 1
+            matched += 1
+            if matched >= last_n:
+                break
+
+    return {"roma_wins": roma_wins, "draws": draws, "opp_wins": opp_wins, "total": matched}
 def build_full_history(start_year: int = 2000, team: str = "Roma") -> List[Dict]:
     history = []
     # Logica per scaricare anni passati...
