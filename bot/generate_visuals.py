@@ -492,3 +492,6 @@ def generate_weekly_card(
              ha="center", color=TEXT_MUTED, fontsize=7)
 
     return _save_figure(fig, filename)
+
+# Alias for backwards compatibility
+    generate_points_history = generate_points_history_chart
