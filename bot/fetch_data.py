@@ -43,7 +43,7 @@ def _ss_get(path: str, retries: int = 5, delay: float = 3.0) -> Optional[Dict]:
     
     for attempt in range(retries):
         try:
-           r = curl_requests.get(url, headers=HEADERS_SS, impersonate="chrome110", timeout=20)
+            r = curl_requests.get(url, headers=HEADERS_SS, impersonate="chrome110", timeout=20)
             
             if r.status_code == 200:
                 time.sleep(random.uniform(0.5, 1.5))
@@ -54,17 +54,17 @@ def _ss_get(path: str, retries: int = 5, delay: float = 3.0) -> Optional[Dict]:
                 logger.warning(f"SofaScore Error {r.status_code} — Tentativo {attempt+1}. Attendo {wait:.1f}s...")
                 time.sleep(wait)
                 continue
-                
+
             if r.status_code == 404:
                 return None
-                
+
             r.raise_for_status()
-            
+
         except Exception as e:
             logger.warning(f"SofaScore {path} attempt {attempt+1}: {e}")
             time.sleep(delay * 2)
     return None
-
+    
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PARTITE
