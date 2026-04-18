@@ -494,4 +494,4 @@ def generate_weekly_card(
     return _save_figure(fig, filename)
 
 # Alias for backwards compatibility
-    generate_points_history = generate_points_history_chart
+generate_points_history = generate_points_history_chart
