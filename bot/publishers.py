@@ -17,6 +17,10 @@ import time
 from typing import List, Optional
 
 import requests
+try:
+    from curl_cffi import requests as curl_requests
+except ImportError:
+    curl_requests = requests  # fallback
 
 logger = logging.getLogger(__name__)
 
@@ -25,94 +29,60 @@ logger = logging.getLogger(__name__)
 # IMAGE HOSTING — catbox.moe + fallback chain
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _upload_catbox(image_path: str) -> Optional[str]:
-    """
-    catbox.moe — hosting permanente, anonimo, gratuito.
-    Restituisce URL diretto .png
-    """
-    try:
-        with open(image_path, "rb") as f:
-            data = f.read()
-        r = requests.post(
-            "https://catbox.moe/user/api.php",
-            data={"reqtype": "fileupload"},
-            files={"fileToUpload": (os.path.basename(image_path), data, "image/png")},
-            timeout=30,
-        )
-        r.raise_for_status()
-        url = r.text.strip()
-        if url.startswith("https://files.catbox.moe/"):
-            logger.info(f"catbox.moe OK: {url}")
-            return url
-    except Exception as e:
-        logger.warning(f"catbox.moe failed: {e}")
-    return None
-
-
-def _upload_tmpfiles(image_path: str) -> Optional[str]:
-    """
-    tmpfiles.org — 24h retention, anonimo, gratuito. Fallback 1.
-    """
-    try:
-        with open(image_path, "rb") as f:
-            data = f.read()
-        r = requests.post(
-            "https://tmpfiles.org/api/v1/upload",
-            files={"file": (os.path.basename(image_path), data, "image/png")},
-            timeout=30,
-        )
-        r.raise_for_status()
-        j = r.json()
-        raw_url = j.get("data", {}).get("url", "")
-        # tmpfiles.org restituisce https://tmpfiles.org/XXXXX/file.png
-        # per il download diretto aggiungere /dl/
-        if raw_url:
-            dl_url = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-            logger.info(f"tmpfiles.org OK: {dl_url}")
-            return dl_url
-    except Exception as e:
-        logger.warning(f"tmpfiles.org failed: {e}")
-    return None
-
-
-def _upload_0x0(image_path: str) -> Optional[str]:
-    """
-    0x0.st — permanente, anonimo, gratuito. Fallback 2.
-    """
-    try:
-        with open(image_path, "rb") as f:
-            data = f.read()
-        r = requests.post(
-            "https://0x0.st",
-            files={"file": (os.path.basename(image_path), data, "image/png")},
-            timeout=30,
-        )
-        r.raise_for_status()
-        url = r.text.strip()
-        if url.startswith("https://"):
-            logger.info(f"0x0.st OK: {url}")
-            return url
-    except Exception as e:
-        logger.warning(f"0x0.st failed: {e}")
-    return None
-
-
 def upload_image_for_instagram(image_path: str) -> Optional[str]:
     """
-    Carica l'immagine su un host gratuito e restituisce URL pubblico per Instagram Graph API.
-    Tenta in ordine: catbox.moe → tmpfiles.org → 0x0.st
+    Committa l'immagine su GitHub e restituisce raw.githubusercontent.com URL.
+    Stesso approccio del bot RomaStats (funzionante).
+    Repo deve essere pubblico. Richiede GH_TOKEN + GH_OWNER + GH_REPO.
     """
     if not image_path or not os.path.exists(image_path):
         logger.warning(f"upload_image_for_instagram: file non trovato: {image_path}")
         return None
 
-    for uploader in (_upload_catbox, _upload_tmpfiles, _upload_0x0):
-        url = uploader(image_path)
-        if url:
-            return url
-        time.sleep(2)
+    gh_token = os.getenv("GH_TOKEN", "")
+    gh_owner = os.getenv("GH_OWNER", "")
+    gh_repo  = os.getenv("GH_REPO", "")
 
-    logger.error("Tutti gli image host hanno fallito")
+    if not all([gh_token, gh_owner, gh_repo]):
+        logger.error("GH_TOKEN / GH_OWNER / GH_REPO mancanti — impossibile caricare immagine")
+        return None
+
+    filename = os.path.basename(image_path)
+    # Store images in visuals/ folder in the repo
+    repo_path = f"visuals/{filename}"
+    api_url   = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/contents/{repo_path}"
+    gh_h = {
+        "Authorization":        f"Bearer {gh_token}",
+        "Accept":               "application/vnd.github+json",
+        "Content-Type":         "application/json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent":           "ASRomaDataBot/1.0",   # required by GitHub API
+    }
+
+    with open(image_path, "rb") as f:
+        content_b64 = base64.b64encode(f.read()).decode()
+
+    # GET existing SHA (required to update an existing file)
+    get_res = curl_requests.get(api_url, headers=gh_h, timeout=15)
+    sha = get_res.json().get("sha") if get_res.status_code == 200 else None
+
+    body = {
+        "message": f"bot: update {filename} [skip ci]",
+        "content": content_b64,
+        "branch":  "main",
+        **({"sha": sha} if sha else {}),
+    }
+    import json as _json
+    put_res = curl_requests.put(api_url, headers=gh_h, data=_json.dumps(body).encode(), timeout=30)
+
+    if put_res.status_code in (200, 201):
+        raw_url = f"https://raw.githubusercontent.com/{gh_owner}/{gh_repo}/main/{repo_path}"
+        logger.info(f"  Immagine committata: {raw_url}")
+        logger.info("  Attendo 20s propagazione CDN GitHub...")
+        time.sleep(20)
+        return raw_url
+
+    logger.error(f"  Commit GitHub fallito: {put_res.status_code} — {put_res.text[:300]}")
     return None
 
 
@@ -134,9 +104,14 @@ class InstagramPublisher:
     def _post(self, endpoint: str, data: dict) -> Optional[dict]:
         data["access_token"] = self.access_token
         try:
-            r = requests.post(f"{self.BASE}/{endpoint}", data=data, timeout=30)
-            r.raise_for_status()
-            return r.json()
+            r = curl_requests.post(f"{self.BASE}/{endpoint}", data=data, timeout=30)
+            j = r.json()
+            logger.info(f"  IG {endpoint} response: {j}")
+            if "error" in j:
+                e = j["error"]
+                logger.error(f"  IG errore [{e.get('code')}]: {e.get('message')}")
+                return None
+            return j
         except Exception as e:
             logger.error(f"Instagram API error ({endpoint}): {e}")
         return None
@@ -165,17 +140,19 @@ class InstagramPublisher:
             logger.error(f"Instagram container fallito: {container}")
             return None
 
-        time.sleep(8)  # attende che Meta processi l'immagine
+        creation_id = container["id"]
+        logger.info(f"  Container OK: {creation_id}, attendo 8s...")
+        time.sleep(8)
 
         # Step 2: pubblica
         result = self._post(f"{self.user_id}/media_publish", {
-            "creation_id": container["id"],
+            "creation_id": creation_id,
         })
         if result and "id" in result:
-            logger.info(f"Instagram: pubblicato (id={result['id']})")
+            logger.info(f"  Instagram OK: media_id={result['id']}")
             return result["id"]
 
-        logger.error(f"Instagram publish fallito: {result}")
+        logger.error(f"  Instagram publish fallito: {result}")
         return None
 
     def publish_carousel(self, image_paths: List[str], caption: str) -> Optional[str]:
@@ -367,7 +344,14 @@ class BlueskyPublisher:
                 )
             else:
                 client.send_post(text=text)
-            logger.info("Bluesky: pubblicato")
+            post_id = ""
+            try:
+                from atproto import Client as _C
+                # post uri is in the response — extract id
+                pass
+            except Exception:
+                pass
+            logger.info("Bluesky: pubblicato OK")
             return True
         except Exception as e:
             logger.error(f"Bluesky post: {e}")
