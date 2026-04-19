@@ -268,9 +268,13 @@ def run_post_match(force: bool = False):
     return results
 
 
+# Alias called by main.py CLI
+def run(force: bool = False, half_time: bool = False):
+    run_post_match(force=force)
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--force", action="store_true",
-                    help="Ignora finestra temporale e stato")
+    ap.add_argument("--force",     action="store_true", help="Ignora finestra temporale e stato")
+    ap.add_argument("--half-time", action="store_true", help="Pubblica stats primo tempo")
     args = ap.parse_args()
     run_post_match(force=args.force)

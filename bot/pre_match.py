@@ -24,6 +24,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 
+# Alias called by main.py CLI
+run = None  # defined below
+
 def run_pre_match():
     logger.info("═══ ASRomaData Bot — Pre-Match ═══")
 
@@ -133,3 +136,6 @@ def run_pre_match():
 
 if __name__ == "__main__":
     run_pre_match()
+
+# Alias
+run = run_pre_match

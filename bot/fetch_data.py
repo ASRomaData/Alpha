@@ -22,12 +22,15 @@ from curl_cffi import requests as curl_requests
 logger = logging.getLogger(__name__)
 
 ROMA_ID  = 2702
-_SS_BASE = "https://api.sofascore.com/api/v1"
+_SS_BASE = "https://www.sofascore.com/api/v1"
 
 HEADERS_SS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
     "Referer": "https://www.sofascore.com/",
+    "Origin": "https://www.sofascore.com",
+    "Cache-Control": "no-cache",
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
