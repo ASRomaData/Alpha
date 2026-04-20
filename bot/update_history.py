@@ -150,12 +150,17 @@ def update_match_history(
 
     # ─── Aggiorna riepilogo stagione corrente ─────────────────────
     season_label = _current_season_label()
-    cs = history.setdefault("current_season", {
+    _cs_default = {
         "season": season_label,
         "games": 0, "wins": 0, "draws": 0, "losses": 0,
         "goals_for": 0, "goals_against": 0, "points": 0,
         "xg_total": 0.0, "xga_total": 0.0,
-    })
+    }
+    cs = history.get("current_season") or {}
+    # Merge defaults for any missing keys (handles empty {} from init)
+    for k, v in _cs_default.items():
+        cs.setdefault(k, v)
+    history["current_season"] = cs
     cs["games"] += 1
     cs["goals_for"]     += roma_score
     cs["goals_against"] += opp_score
