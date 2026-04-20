@@ -268,7 +268,7 @@ def generate_match_card(
 
         ax_players.text(0.5, 0.9, "TOP PERFORMERS ROMA",
                         ha="center", va="top", color=ROMA_GOLD,
-                        fontsize=9, fontweight="bold", letter_spacing=1)
+                        fontsize=9, fontweight="bold")
 
         for i, p in enumerate(roma_players):
             x = 0.2 + i * 0.3
