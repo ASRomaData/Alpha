@@ -320,12 +320,13 @@ class BlueskyPublisher:
             logger.error(f"Bluesky login: {e}")
         return self._client
 
-    def post(self, text: str, image_path: Optional[str] = None) -> bool:
+    def post(self, text: str, image_path: Optional[str] = None) -> Optional[str]:
+        """Single post. Returns post URI or None."""
         if not self.enabled:
-            return False
+            return None
         client = self._get_client()
         if not client:
-            return False
+            return None
         try:
             text = text[:300]
             if image_path and os.path.exists(image_path):
@@ -333,7 +334,7 @@ class BlueskyPublisher:
                     img_data = f.read()
                 blob = client.upload_blob(img_data)
                 from atproto import models
-                client.send_post(
+                resp = client.send_post(
                     text=text,
                     embed=models.AppBskyEmbedImages.Main(
                         images=[models.AppBskyEmbedImages.Image(
@@ -343,19 +344,73 @@ class BlueskyPublisher:
                     ),
                 )
             else:
-                client.send_post(text=text)
-            post_id = ""
-            try:
-                from atproto import Client as _C
-                # post uri is in the response — extract id
-                pass
-            except Exception:
-                pass
-            logger.info("Bluesky: pubblicato OK")
-            return True
+                resp = client.send_post(text=text)
+            uri = getattr(resp, "uri", None)
+            cid = getattr(resp, "cid", None)
+            logger.info(f"Bluesky: pubblicato OK — {uri}")
+            return uri
         except Exception as e:
             logger.error(f"Bluesky post: {e}")
-        return False
+        return None
+
+    def post_thread(self, texts: List[str], image_path: Optional[str] = None) -> bool:
+        """
+        Pubblica un thread Bluesky: il primo post include l'immagine,
+        i successivi sono reply in catena.
+        """
+        if not self.enabled or not texts:
+            return False
+        client = self._get_client()
+        if not client:
+            return False
+
+        parent_ref = None
+        root_ref   = None
+
+        for i, text in enumerate(texts):
+            try:
+                text = text[:300]
+                kwargs: dict = {"text": text}
+
+                # Prima immagine solo sul primo post
+                if i == 0 and image_path and os.path.exists(image_path):
+                    with open(image_path, "rb") as f:
+                        img_data = f.read()
+                    blob = client.upload_blob(img_data)
+                    from atproto import models
+                    kwargs["embed"] = models.AppBskyEmbedImages.Main(
+                        images=[models.AppBskyEmbedImages.Image(
+                            alt="AS Roma stats · @ASRomaData",
+                            image=blob.blob,
+                        )]
+                    )
+
+                # Reply chain
+                if parent_ref:
+                    from atproto import models
+                    kwargs["reply_to"] = models.AppBskyFeedPost.ReplyRef(
+                        parent=parent_ref,
+                        root=root_ref or parent_ref,
+                    )
+
+                resp = client.send_post(**kwargs)
+                uri  = getattr(resp, "uri", "")
+                cid  = getattr(resp, "cid", "")
+                logger.info(f"Bluesky thread {i+1}/{len(texts)}: {uri}")
+
+                from atproto import models
+                ref = models.ComAtprotoRepoStrongRef.Main(uri=uri, cid=cid)
+                if i == 0:
+                    root_ref = ref
+                parent_ref = ref
+
+                time.sleep(2)
+
+            except Exception as e:
+                logger.error(f"Bluesky thread post {i+1}: {e}")
+                break
+
+        return parent_ref is not None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -439,7 +494,12 @@ def publish_to_all_platforms(
 
     # ── Bluesky ──────────────────────────────────────────────────
     bsky = BlueskyPublisher()
-    ok   = bsky.post(bsky_text, image_path=image_path)
+    if len(x_thread) > 1:
+        # Pubblica come thread se ci sono più parti (pre-match / post-match)
+        ok = bsky.post_thread(x_thread, image_path=image_path)
+    else:
+        # Post singolo (weekly o testo breve)
+        ok = bool(bsky.post(bsky_text or (x_thread[0] if x_thread else ""), image_path=image_path))
     results["bluesky"] = {"published": ok}
     time.sleep(2)
 
