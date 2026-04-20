@@ -441,11 +441,15 @@ class ThreadsPublisher:
             }
             if image_url:
                 data["image_url"] = image_url
+            elif image_path and not image_url:
+                logger.warning("Threads: upload immagine fallito, pubblico solo testo")
+                data["media_type"] = "TEXT"
 
             r = requests.post(
                 f"{self.BASE}/{self.user_id}/threads",
                 data=data, timeout=30,
             )
+            logger.info(f"  Threads container response: {r.status_code} {r.text[:200]}")
             r.raise_for_status()
             container_id = r.json().get("id")
             if not container_id:
