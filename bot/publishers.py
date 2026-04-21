@@ -91,6 +91,11 @@ def upload_image_for_instagram(image_path: str) -> Optional[str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class InstagramPublisher:
+    """
+    Instagram Graph API publisher.
+    Usa curl_cffi (stesso approccio del bot RomaStats funzionante).
+    Passa parametri come form data — NON come JSON.
+    """
 
     BASE = "https://graph.facebook.com/v19.0"
 
@@ -101,28 +106,7 @@ class InstagramPublisher:
         if not self.enabled:
             logger.warning("Instagram: IG_USER_ID o IG_ACCESS_TOKEN mancanti")
 
-    def _post(self, endpoint: str, data: dict) -> Optional[dict]:
-        data["access_token"] = self.access_token
-        try:
-            r = curl_requests.post(f"{self.BASE}/{endpoint}", data=data, timeout=30)
-            j = r.json()
-            logger.info(f"  IG {endpoint} response: {j}")
-            if "error" in j:
-                e = j["error"]
-                logger.error(f"  IG errore [{e.get('code')}]: {e.get('message')}")
-                return None
-            return j
-        except Exception as e:
-            logger.error(f"Instagram API error ({endpoint}): {e}")
-        return None
-
     def publish_photo(self, image_path: str, caption: str) -> Optional[str]:
-        """
-        Pubblica foto su Instagram.
-        1. Carica immagine su host gratuito (catbox.moe primary)
-        2. Crea media container con l'URL
-        3. Pubblica il container
-        """
         if not self.enabled:
             return None
 
@@ -131,67 +115,82 @@ class InstagramPublisher:
             logger.error("Instagram: impossibile ottenere URL pubblico immagine")
             return None
 
-        # Step 1: crea container
-        container = self._post(f"{self.user_id}/media", {
-            "image_url": image_url,
-            "caption":   caption[:2200],  # IG limit
-        })
-        if not container or "id" not in container:
-            logger.error(f"Instagram container fallito: {container}")
+        # Step 1: crea container (form-encoded, curl_cffi — identico a RomaStats)
+        logger.info(f"  Container con URL: {image_url[:80]}...")
+        cr = curl_requests.post(
+            f"{self.BASE}/{self.user_id}/media",
+            data={"image_url": image_url, "caption": caption[:2200], "access_token": self.access_token},
+            timeout=30,
+        )
+        cd = cr.json()
+        logger.info(f"  Container response: {cd}")
+        if "error" in cd:
+            e = cd["error"]
+            logger.error(f"  IG errore container [{e.get('code')}]: {e.get('message')}")
+            return None
+        creation_id = cd.get("id")
+        if not creation_id:
+            logger.error("  IG: creation_id mancante")
             return None
 
-        creation_id = container["id"]
+        # Step 2: pubblica
         logger.info(f"  Container OK: {creation_id}, attendo 8s...")
         time.sleep(8)
-
-        # Step 2: pubblica
-        result = self._post(f"{self.user_id}/media_publish", {
-            "creation_id": creation_id,
-        })
-        if result and "id" in result:
-            logger.info(f"  Instagram OK: media_id={result['id']}")
-            return result["id"]
-
-        logger.error(f"  Instagram publish fallito: {result}")
-        return None
+        pr = curl_requests.post(
+            f"{self.BASE}/{self.user_id}/media_publish",
+            data={"creation_id": creation_id, "access_token": self.access_token},
+            timeout=30,
+        )
+        pd = pr.json()
+        logger.info(f"  Publish response: {pd}")
+        if "error" in pd:
+            e = pd["error"]
+            logger.error(f"  IG errore publish [{e.get('code')}]: {e.get('message')}")
+            return None
+        media_id = pd.get("id")
+        logger.info(f"  Instagram OK: media_id={media_id}")
+        return media_id
 
     def publish_carousel(self, image_paths: List[str], caption: str) -> Optional[str]:
         """Pubblica carousel (max 10 immagini)."""
         if not self.enabled or not image_paths:
             return None
-
         child_ids = []
         for path in image_paths[:10]:
             url = upload_image_for_instagram(path)
             if not url:
                 continue
-            c = self._post(f"{self.user_id}/media", {
-                "image_url":        url,
-                "is_carousel_item": "true",
-            })
-            if c and "id" in c:
-                child_ids.append(c["id"])
+            cr = curl_requests.post(
+                f"{self.BASE}/{self.user_id}/media",
+                data={"image_url": url, "is_carousel_item": "true", "access_token": self.access_token},
+                timeout=30,
+            )
+            cd = cr.json()
+            if "id" in cd:
+                child_ids.append(cd["id"])
             time.sleep(3)
-
         if not child_ids:
             return None
-
-        carousel = self._post(f"{self.user_id}/media", {
-            "media_type": "CAROUSEL",
-            "children":   ",".join(child_ids),
-            "caption":    caption[:2200],
-        })
-        if not carousel or "id" not in carousel:
+        carousel = curl_requests.post(
+            f"{self.BASE}/{self.user_id}/media",
+            data={"media_type": "CAROUSEL", "children": ",".join(child_ids),
+                  "caption": caption[:2200], "access_token": self.access_token},
+            timeout=30,
+        )
+        cd = carousel.json()
+        if "id" not in cd:
             return None
-
         time.sleep(8)
-        result = self._post(f"{self.user_id}/media_publish", {
-            "creation_id": carousel["id"],
-        })
-        if result and "id" in result:
-            logger.info(f"Instagram carousel: pubblicato (id={result['id']})")
-            return result["id"]
-        return None
+        pr = curl_requests.post(
+            f"{self.BASE}/{self.user_id}/media_publish",
+            data={"creation_id": cd["id"], "access_token": self.access_token},
+            timeout=30,
+        )
+        pd = pr.json()
+        media_id = pd.get("id")
+        if media_id:
+            logger.info(f"  Instagram carousel OK: media_id={media_id}")
+        return media_id
 
 
 # ══════════════════════════════════════════════════════════════════════════════
