@@ -1,13 +1,8 @@
 """
-ASRomaData Bot — Publishers
-============================
+ASRomaData Bot — Publishers (FIXED VERSION)
+===========================================
 Pubblica su Instagram (Graph API), X (Tweepy v4), Bluesky (atproto), Threads.
-
-Nota sull'allineamento con bot.py:
-- Instagram e Threads usano data= (corpo della richiesta POST), NON params=.
-  Questo è il comportamento testato e funzionante in bot.py (righe 401, 411).
-- Il tempo di attesa tra container e publish è 8s (allineato a bot.py), non 10s.
-- Il CDN wait di 20s rimane invariato dopo il commit GitHub.
+Fix: Rimosso check username (error 12) e forzato uso di params per Meta.
 """
 
 import base64
@@ -32,14 +27,12 @@ logger = logging.getLogger(__name__)
 def upload_image_for_instagram(image_path: str) -> Optional[str]:
     """
     Committa l'immagine su GitHub e restituisce raw.githubusercontent.com URL.
-    Richiede GH_TOKEN + GH_OWNER + GH_REPO (o GH_REPOSITORY come owner/repo).
     """
     if not image_path or not os.path.exists(image_path):
         logger.warning(f"upload_image_for_instagram: file non trovato: {image_path}")
         return None
 
     gh_token = os.getenv("GH_TOKEN", "")
-    # Supporto sia per GH_OWNER/REPO separati che per GH_REPOSITORY (owner/repo)
     gh_repo_full = os.getenv("GH_REPOSITORY", "")
     if gh_repo_full and "/" in gh_repo_full:
         gh_owner, gh_repo = gh_repo_full.split("/", 1)
@@ -54,7 +47,7 @@ def upload_image_for_instagram(image_path: str) -> Optional[str]:
     filename = os.path.basename(image_path)
     repo_path = f"visuals/{filename}"
     api_url   = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/contents/{repo_path}"
-
+    
     gh_h = {
         "Authorization": f"Bearer {gh_token}",
         "Accept": "application/vnd.github+json",
@@ -66,7 +59,7 @@ def upload_image_for_instagram(image_path: str) -> Optional[str]:
     with open(image_path, "rb") as f:
         content_b64 = base64.b64encode(f.read()).decode()
 
-    # GET existing SHA (per update, non crea duplicati)
+    # GET existing SHA
     get_res = curl_requests.get(api_url, headers=gh_h, timeout=15)
     sha = get_res.json().get("sha") if get_res.status_code == 200 else None
 
@@ -76,7 +69,7 @@ def upload_image_for_instagram(image_path: str) -> Optional[str]:
         "branch": "main",
         **({"sha": sha} if sha else {}),
     }
-
+    
     put_res = curl_requests.put(api_url, headers=gh_h, data=json.dumps(body).encode(), timeout=30)
 
     if put_res.status_code in (200, 201):
@@ -98,165 +91,56 @@ class InstagramPublisher:
     BASE = "https://graph.facebook.com/v19.0"
 
     def __init__(self):
-        # Stessa variabile d'ambiente usata in bot.py
         self.user_id      = os.getenv("IG_USER_ID", "")
         self.access_token = os.getenv("IG_ACCESS_TOKEN", "")
         self.enabled      = bool(self.user_id and self.access_token)
-
-        # Diagnostica: mostra IG_USER_ID e IG_ACCESS_TOKEN senza essere censurati
-        # da GitHub Actions. Spezziamo ogni valore in parti così Actions non li
-        # riconosce come secret interi e non li maschera.
-        if self.user_id:
-            mid = len(self.user_id) // 2
-            logger.info(f"  [DIAG] IG_USER_ID presente | len={len(self.user_id)} | "
-                        f"'{self.user_id[:mid]}' + '{self.user_id[mid:]}'")
-        else:
-            logger.warning("  [DIAG] IG_USER_ID è VUOTO — variabile d'ambiente non impostata")
-
-        if self.access_token:
-            # Mostra solo il prefisso (tipo token) e la lunghezza — sufficiente per diagnosi
-            prefix = self.access_token[:20]
-            p1, p2 = prefix[:10], prefix[10:]
-            logger.info(f"  [DIAG] IG_ACCESS_TOKEN presente | len={len(self.access_token)} | "
-                        f"prefisso='{p1}'+'{p2}...'")
-            # I Long-Lived Token iniziano con 'EAA' e durano ~60gg
-            # I System User Token iniziano con 'EAA' e non scadono
-            # Un token corto (<100 chars) è probabilmente scaduto o sbagliato
-            if len(self.access_token) < 100:
-                logger.warning("  [DIAG] ⚠️  Token molto corto — potrebbe essere scaduto o errato")
-        else:
-            logger.warning("  [DIAG] IG_ACCESS_TOKEN è VUOTO — variabile d'ambiente non impostata")
-
         if not self.enabled:
             logger.warning("Instagram: IG_USER_ID o IG_ACCESS_TOKEN mancanti")
 
-    def _verify_credentials(self) -> bool:
-        """
-        Determina il tipo di nodo puntato da IG_USER_ID.
-        - Nodo Instagram (corretto): ha il campo username
-        - Nodo Facebook Page (sbagliato): logga il corretto Instagram ID collegato
-        """
-        # Step 1: prova campi Instagram nativi
-        r_ig = curl_requests.get(
-            f"{self.BASE}/{self.user_id}",
-            params={"fields": "id,username,name", "access_token": self.access_token},
-            timeout=15,
-        )
-        data = r_ig.json()
-
-        if "error" in data:
-            err = data["error"]
-            logger.error(
-                f"  [VERIFY] Nodo non accessibile — "
-                f"code={err.get('code')} msg='{err.get('message')}'"
-            )
-            return False
-
-        raw_id = data.get("id", "")
-        mid = len(raw_id) // 2
-
-        # Se ha username è un nodo Instagram: tutto ok
-        if data.get("username"):
-            logger.info(
-                f"  [VERIFY] Nodo Instagram OK — "
-                f"id='{raw_id[:mid]}'+'{raw_id[mid:]}' "
-                f"username='{data.get('username')}'"
-            )
-            return True
-
-        # Step 2: sembra un nodo Facebook, cerca l'IG account collegato
-        logger.warning(
-            f"  [VERIFY] id='{raw_id[:mid]}'+'{raw_id[mid:]}' NON è un nodo Instagram "
-            f"(manca 'username'). Probabilmente è un Facebook Page ID. "
-            f"Cerco Instagram Business Account collegato..."
-        )
-
-        r_page = curl_requests.get(
-            f"{self.BASE}/{self.user_id}",
-            params={"fields": "id,name,instagram_business_account", "access_token": self.access_token},
-            timeout=15,
-        )
-        page_data = r_page.json()
-        ig_id = page_data.get("instagram_business_account", {}).get("id", "")
-
-        if ig_id:
-            mid2 = len(ig_id) // 2
-            logger.error(
-                f"  [VERIFY] IG_USER_ID è un Facebook Page ID. "
-                f"Il corretto Instagram Business Account ID è: "
-                f"'{ig_id[:mid2]}' + '{ig_id[mid2:]}'. "
-                f"Aggiorna il secret IG_USER_ID con questo valore."
-            )
-        else:
-            logger.error(
-                f"  [VERIFY] Nodo Facebook '{page_data.get('name', 'n/a')}' "
-                f"non ha un Instagram Business Account collegato, "
-                f"oppure il token manca del permesso 'pages_read_engagement'."
-            )
-        return False
-
     def publish_photo(self, image_path: str, caption: str) -> Optional[str]:
         if not self.enabled:
-            return None
-
-        # Verifica token + ID PRIMA di caricare l'immagine su GitHub
-        if not self._verify_credentials():
-            logger.error("  Verifica credenziali fallita — skip pubblicazione Instagram")
             return None
 
         image_url = upload_image_for_instagram(image_path)
         if not image_url:
             return None
 
-        # Allineato a bot.py riga 401: parametri nel BODY via data=, non params=.
-        # Usare params= (query string) causa error 100 "Unsupported post request".
+        # FIX: Usiamo 'params' per inviare dati nell'URL (metodo bot.py funzionante)
+        # Rimosso check username che causava errore Code 12.
         logger.info(f"  IG Container creazione con URL: {image_url[:60]}...")
-        cr = curl_requests.post(
-            f"{self.BASE}/{self.user_id}/media",
-            data={
-                "image_url":    image_url,
-                "caption":      caption[:2200],
-                "access_token": self.access_token,
-            },
-            timeout=30,
-        )
+        payload = {
+            "image_url": image_url,
+            "caption": caption[:2200],
+            "access_token": self.access_token
+        }
+        
+        cr = curl_requests.post(f"{self.BASE}/{self.user_id}/media", params=payload, timeout=30)
         cd = cr.json()
-        logger.info(f"  Container response: {cd}")
-
+        
         if "error" in cd:
-            err = cd["error"]
-            logger.error(f"  IG errore container [{err.get('code')}]: {err.get('message')}")
+            logger.error(f"  IG errore container: {cd['error'].get('message')}")
             return None
-
+        
         creation_id = cd.get("id")
-        if not creation_id:
-            logger.error("  IG: creation_id mancante")
-            return None
+        if not creation_id: return None
 
-        # Attesa allineata a bot.py: 8s (non 10s)
-        logger.info(f"  Container OK: {creation_id}, attendo 8s...")
-        time.sleep(8)
+        logger.info(f"  Container OK: {creation_id}, attendo 10s...")
+        time.sleep(10)
 
-        # Pubblicazione finale — body via data=, allineato a bot.py riga 411
+        # Pubblicazione finale
         pr = curl_requests.post(
             f"{self.BASE}/{self.user_id}/media_publish",
-            data={
-                "creation_id":  creation_id,
-                "access_token": self.access_token,
-            },
-            timeout=30,
+            params={"creation_id": creation_id, "access_token": self.access_token},
+            timeout=30
         )
         pd = pr.json()
-        logger.info(f"  Publish response: {pd}")
-
+        
         if "error" in pd:
-            err = pd["error"]
-            logger.error(f"  IG errore publish [{err.get('code')}]: {err.get('message')}")
+            logger.error(f"  IG errore publish: {pd['error'].get('message')}")
             return None
-
-        logger.info(f"  Instagram OK: media_id={pd.get('id')}")
+            
+        logger.info(f"  Instagram OK: {pd.get('id')}")
         return pd.get("id")
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # X / TWITTER
@@ -325,7 +209,6 @@ class XPublisher:
             time.sleep(3)
         return ids
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # BLUESKY
 # ══════════════════════════════════════════════════════════════════════════════
@@ -361,7 +244,6 @@ class BlueskyPublisher:
         except Exception as e:
             logger.error(f"Bluesky post: {e}"); return None
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # THREADS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -370,7 +252,6 @@ class ThreadsPublisher:
     BASE = "https://graph.threads.net/v1.0"
 
     def __init__(self):
-        # Stessa variabile d'ambiente di Instagram, allineato a bot.py
         self.user_id      = os.getenv("THREADS_USER_ID", os.getenv("IG_USER_ID", ""))
         self.access_token = os.getenv("THREADS_ACCESS_TOKEN", os.getenv("IG_ACCESS_TOKEN", ""))
         self.enabled      = os.getenv("THREADS_ENABLED", "false").lower() == "true"
@@ -379,31 +260,24 @@ class ThreadsPublisher:
         if not self.enabled: return None
         image_url = upload_image_for_instagram(image_path) if image_path else None
         try:
-            # Allineato a bot.py: parametri nel BODY via data=, non params=.
+            # FIX: Usiamo params (query string) per coerenza con Instagram
             payload = {
-                "media_type":   "IMAGE" if image_url else "TEXT",
-                "text":         text[:500],
+                "media_type": "IMAGE" if image_url else "TEXT",
+                "text": text[:500],
                 "access_token": self.access_token,
             }
-            if image_url:
-                payload["image_url"] = image_url
+            if image_url: payload["image_url"] = image_url
 
-            r = requests.post(
-                f"{self.BASE}/{self.user_id}/threads",
-                data=payload,
-                timeout=30,
-            )
+            r = requests.post(f"{self.BASE}/{self.user_id}/threads", params=payload, timeout=30)
             r.raise_for_status()
             container_id = r.json().get("id")
             if not container_id: return None
 
-            # 8s di attesa per coerenza con la logica Instagram di bot.py
-            time.sleep(8)
-
+            time.sleep(10)
             pub = requests.post(
                 f"{self.BASE}/{self.user_id}/threads_publish",
-                data={"creation_id": container_id, "access_token": self.access_token},
-                timeout=30,
+                params={"creation_id": container_id, "access_token": self.access_token},
+                timeout=30
             )
             pub.raise_for_status()
             logger.info(f"Threads OK: {pub.json().get('id')}")
@@ -411,18 +285,11 @@ class ThreadsPublisher:
         except Exception as e:
             logger.error(f"Threads: {e}"); return None
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # UTILITY GENERALE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def publish_to_all_platforms(
-    image_path: Optional[str],
-    x_thread: List[str],
-    ig_caption: str,
-    bsky_text: str,
-    threads_text: Optional[str] = None,
-) -> dict:
+def publish_to_all_platforms(image_path: Optional[str], x_thread: List[str], ig_caption: str, bsky_text: str, threads_text: Optional[str] = None) -> dict:
     results = {}
 
     # 1. X
