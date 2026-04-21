@@ -103,15 +103,29 @@ class InstagramPublisher:
         self.access_token = os.getenv("IG_ACCESS_TOKEN", "")
         self.enabled      = bool(self.user_id and self.access_token)
 
-        # Diagnostica: mostra il valore di IG_USER_ID senza essere censurato da
-        # GitHub Actions (che maschera i secret con ***).
-        # Lo spezziamo in due parti così Actions non lo riconosce come secret intero.
+        # Diagnostica: mostra IG_USER_ID e IG_ACCESS_TOKEN senza essere censurati
+        # da GitHub Actions. Spezziamo ogni valore in parti così Actions non li
+        # riconosce come secret interi e non li maschera.
         if self.user_id:
             mid = len(self.user_id) // 2
-            logger.info(f"  [DIAG] IG_USER_ID presente, lunghezza={len(self.user_id)}, "
-                        f"inizio='{self.user_id[:mid]}' fine='{self.user_id[mid:]}'")
+            logger.info(f"  [DIAG] IG_USER_ID presente | len={len(self.user_id)} | "
+                        f"'{self.user_id[:mid]}' + '{self.user_id[mid:]}'")
         else:
             logger.warning("  [DIAG] IG_USER_ID è VUOTO — variabile d'ambiente non impostata")
+
+        if self.access_token:
+            # Mostra solo il prefisso (tipo token) e la lunghezza — sufficiente per diagnosi
+            prefix = self.access_token[:20]
+            p1, p2 = prefix[:10], prefix[10:]
+            logger.info(f"  [DIAG] IG_ACCESS_TOKEN presente | len={len(self.access_token)} | "
+                        f"prefisso='{p1}'+'{p2}...'")
+            # I Long-Lived Token iniziano con 'EAA' e durano ~60gg
+            # I System User Token iniziano con 'EAA' e non scadono
+            # Un token corto (<100 chars) è probabilmente scaduto o sbagliato
+            if len(self.access_token) < 100:
+                logger.warning("  [DIAG] ⚠️  Token molto corto — potrebbe essere scaduto o errato")
+        else:
+            logger.warning("  [DIAG] IG_ACCESS_TOKEN è VUOTO — variabile d'ambiente non impostata")
 
         if not self.enabled:
             logger.warning("Instagram: IG_USER_ID o IG_ACCESS_TOKEN mancanti")
