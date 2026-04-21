@@ -1,8 +1,13 @@
 """
-ASRomaData Bot — Publishers (FIXED VERSION)
-===========================================
+ASRomaData Bot — Publishers
+============================
 Pubblica su Instagram (Graph API), X (Tweepy v4), Bluesky (atproto), Threads.
-Fix: Utilizzo di params (query string) per Meta Graph API per stabilità.
+
+Nota sull'allineamento con bot.py:
+- Instagram e Threads usano data= (corpo della richiesta POST), NON params=.
+  Questo è il comportamento testato e funzionante in bot.py (righe 401, 411).
+- Il tempo di attesa tra container e publish è 8s (allineato a bot.py), non 10s.
+- Il CDN wait di 20s rimane invariato dopo il commit GitHub.
 """
 
 import base64
@@ -49,7 +54,7 @@ def upload_image_for_instagram(image_path: str) -> Optional[str]:
     filename = os.path.basename(image_path)
     repo_path = f"visuals/{filename}"
     api_url   = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/contents/{repo_path}"
-    
+
     gh_h = {
         "Authorization": f"Bearer {gh_token}",
         "Accept": "application/vnd.github+json",
@@ -61,7 +66,7 @@ def upload_image_for_instagram(image_path: str) -> Optional[str]:
     with open(image_path, "rb") as f:
         content_b64 = base64.b64encode(f.read()).decode()
 
-    # GET existing SHA
+    # GET existing SHA (per update, non crea duplicati)
     get_res = curl_requests.get(api_url, headers=gh_h, timeout=15)
     sha = get_res.json().get("sha") if get_res.status_code == 200 else None
 
@@ -71,7 +76,7 @@ def upload_image_for_instagram(image_path: str) -> Optional[str]:
         "branch": "main",
         **({"sha": sha} if sha else {}),
     }
-    
+
     put_res = curl_requests.put(api_url, headers=gh_h, data=json.dumps(body).encode(), timeout=30)
 
     if put_res.status_code in (200, 201):
@@ -93,6 +98,7 @@ class InstagramPublisher:
     BASE = "https://graph.facebook.com/v19.0"
 
     def __init__(self):
+        # Stessa variabile d'ambiente usata in bot.py
         self.user_id      = os.getenv("IG_USER_ID", "")
         self.access_token = os.getenv("IG_ACCESS_TOKEN", "")
         self.enabled      = bool(self.user_id and self.access_token)
@@ -107,41 +113,55 @@ class InstagramPublisher:
         if not image_url:
             return None
 
-        # LOGICA FIX: Usiamo 'params' invece di 'data' per forzare i parametri nell'URL (come nel bot funzionante)
+        # Allineato a bot.py riga 401: parametri nel BODY via data=, non params=.
+        # Usare params= (query string) causa error 100 "Unsupported post request".
         logger.info(f"  IG Container creazione con URL: {image_url[:60]}...")
-        payload = {
-            "image_url": image_url,
-            "caption": caption[:2200],
-            "access_token": self.access_token
-        }
-        
-        cr = curl_requests.post(f"{self.BASE}/{self.user_id}/media", params=payload, timeout=30)
+        cr = curl_requests.post(
+            f"{self.BASE}/{self.user_id}/media",
+            data={
+                "image_url":    image_url,
+                "caption":      caption[:2200],
+                "access_token": self.access_token,
+            },
+            timeout=30,
+        )
         cd = cr.json()
-        
+        logger.info(f"  Container response: {cd}")
+
         if "error" in cd:
-            logger.error(f"  IG errore container: {cd['error'].get('message')}")
+            err = cd["error"]
+            logger.error(f"  IG errore container [{err.get('code')}]: {err.get('message')}")
             return None
-        
+
         creation_id = cd.get("id")
-        if not creation_id: return None
+        if not creation_id:
+            logger.error("  IG: creation_id mancante")
+            return None
 
-        logger.info(f"  Container OK: {creation_id}, attendo 10s...")
-        time.sleep(10)
+        # Attesa allineata a bot.py: 8s (non 10s)
+        logger.info(f"  Container OK: {creation_id}, attendo 8s...")
+        time.sleep(8)
 
-        # Pubblicazione finale
+        # Pubblicazione finale — body via data=, allineato a bot.py riga 411
         pr = curl_requests.post(
             f"{self.BASE}/{self.user_id}/media_publish",
-            params={"creation_id": creation_id, "access_token": self.access_token},
-            timeout=30
+            data={
+                "creation_id":  creation_id,
+                "access_token": self.access_token,
+            },
+            timeout=30,
         )
         pd = pr.json()
-        
+        logger.info(f"  Publish response: {pd}")
+
         if "error" in pd:
-            logger.error(f"  IG errore publish: {pd['error'].get('message')}")
+            err = pd["error"]
+            logger.error(f"  IG errore publish [{err.get('code')}]: {err.get('message')}")
             return None
-            
-        logger.info(f"  Instagram OK: {pd.get('id')}")
+
+        logger.info(f"  Instagram OK: media_id={pd.get('id')}")
         return pd.get("id")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # X / TWITTER
@@ -210,6 +230,7 @@ class XPublisher:
             time.sleep(3)
         return ids
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # BLUESKY
 # ══════════════════════════════════════════════════════════════════════════════
@@ -245,6 +266,7 @@ class BlueskyPublisher:
         except Exception as e:
             logger.error(f"Bluesky post: {e}"); return None
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # THREADS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -253,6 +275,7 @@ class ThreadsPublisher:
     BASE = "https://graph.threads.net/v1.0"
 
     def __init__(self):
+        # Stessa variabile d'ambiente di Instagram, allineato a bot.py
         self.user_id      = os.getenv("THREADS_USER_ID", os.getenv("IG_USER_ID", ""))
         self.access_token = os.getenv("THREADS_ACCESS_TOKEN", os.getenv("IG_ACCESS_TOKEN", ""))
         self.enabled      = os.getenv("THREADS_ENABLED", "false").lower() == "true"
@@ -261,24 +284,31 @@ class ThreadsPublisher:
         if not self.enabled: return None
         image_url = upload_image_for_instagram(image_path) if image_path else None
         try:
-            # LOGICA FIX: Usiamo params (query string) per coerenza con Instagram
+            # Allineato a bot.py: parametri nel BODY via data=, non params=.
             payload = {
-                "media_type": "IMAGE" if image_url else "TEXT",
-                "text": text[:500],
+                "media_type":   "IMAGE" if image_url else "TEXT",
+                "text":         text[:500],
                 "access_token": self.access_token,
             }
-            if image_url: payload["image_url"] = image_url
+            if image_url:
+                payload["image_url"] = image_url
 
-            r = requests.post(f"{self.BASE}/{self.user_id}/threads", params=payload, timeout=30)
+            r = requests.post(
+                f"{self.BASE}/{self.user_id}/threads",
+                data=payload,
+                timeout=30,
+            )
             r.raise_for_status()
             container_id = r.json().get("id")
             if not container_id: return None
 
-            time.sleep(10)
+            # 8s di attesa per coerenza con la logica Instagram di bot.py
+            time.sleep(8)
+
             pub = requests.post(
                 f"{self.BASE}/{self.user_id}/threads_publish",
-                params={"creation_id": container_id, "access_token": self.access_token},
-                timeout=30
+                data={"creation_id": container_id, "access_token": self.access_token},
+                timeout=30,
             )
             pub.raise_for_status()
             logger.info(f"Threads OK: {pub.json().get('id')}")
@@ -286,11 +316,18 @@ class ThreadsPublisher:
         except Exception as e:
             logger.error(f"Threads: {e}"); return None
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # UTILITY GENERALE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def publish_to_all_platforms(image_path: Optional[str], x_thread: List[str], ig_caption: str, bsky_text: str, threads_text: Optional[str] = None) -> dict:
+def publish_to_all_platforms(
+    image_path: Optional[str],
+    x_thread: List[str],
+    ig_caption: str,
+    bsky_text: str,
+    threads_text: Optional[str] = None,
+) -> dict:
     results = {}
 
     # 1. X
