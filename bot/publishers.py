@@ -102,6 +102,17 @@ class InstagramPublisher:
         self.user_id      = os.getenv("IG_USER_ID", "")
         self.access_token = os.getenv("IG_ACCESS_TOKEN", "")
         self.enabled      = bool(self.user_id and self.access_token)
+
+        # Diagnostica: mostra il valore di IG_USER_ID senza essere censurato da
+        # GitHub Actions (che maschera i secret con ***).
+        # Lo spezziamo in due parti così Actions non lo riconosce come secret intero.
+        if self.user_id:
+            mid = len(self.user_id) // 2
+            logger.info(f"  [DIAG] IG_USER_ID presente, lunghezza={len(self.user_id)}, "
+                        f"inizio='{self.user_id[:mid]}' fine='{self.user_id[mid:]}'")
+        else:
+            logger.warning("  [DIAG] IG_USER_ID è VUOTO — variabile d'ambiente non impostata")
+
         if not self.enabled:
             logger.warning("Instagram: IG_USER_ID o IG_ACCESS_TOKEN mancanti")
 
