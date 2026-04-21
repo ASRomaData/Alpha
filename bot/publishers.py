@@ -130,8 +130,48 @@ class InstagramPublisher:
         if not self.enabled:
             logger.warning("Instagram: IG_USER_ID o IG_ACCESS_TOKEN mancanti")
 
+    def _verify_credentials(self) -> bool:
+        """
+        Chiama GET /{user_id}?fields=id,name,account_type per verificare che
+        il token conosca l'ID e che sia un account Instagram Business/Creator.
+        """
+        r = curl_requests.get(
+            f"{self.BASE}/{self.user_id}",
+            params={
+                "fields": "id,name,account_type,username",
+                "access_token": self.access_token,
+            },
+            timeout=15,
+        )
+        data = r.json()
+        if "error" in data:
+            err = data["error"]
+            logger.error(
+                f"  [VERIFY] Token/ID non validi — "
+                f"code={err.get('code')} subcode={err.get('error_subcode')} "
+                f"msg='{err.get('message')}'"
+            )
+            return False
+        # Maschera l'ID spezzandolo per evitare la censura di Actions
+        raw_id = data.get("id", "")
+        mid = len(raw_id) // 2
+        logger.info(
+            f"  [VERIFY] OK — id='{raw_id[:mid]}'+'{raw_id[mid:]}' "
+            f"username='{data.get('username', 'n/a')}' "
+            f"account_type='{data.get('account_type', 'n/a')}'"
+        )
+        if data.get("account_type") == "PERSONAL":
+            logger.error("  [VERIFY] account_type=PERSONAL: serve un account Business/Creator")
+            return False
+        return True
+
     def publish_photo(self, image_path: str, caption: str) -> Optional[str]:
         if not self.enabled:
+            return None
+
+        # Verifica token + ID PRIMA di caricare l'immagine su GitHub
+        if not self._verify_credentials():
+            logger.error("  Verifica credenziali fallita — skip pubblicazione Instagram")
             return None
 
         image_url = upload_image_for_instagram(image_path)
