@@ -132,38 +132,68 @@ class InstagramPublisher:
 
     def _verify_credentials(self) -> bool:
         """
-        Chiama GET /{user_id}?fields=id,name,account_type per verificare che
-        il token conosca l'ID e che sia un account Instagram Business/Creator.
+        Determina il tipo di nodo puntato da IG_USER_ID.
+        - Nodo Instagram (corretto): ha il campo username
+        - Nodo Facebook Page (sbagliato): logga il corretto Instagram ID collegato
         """
-        r = curl_requests.get(
+        # Step 1: prova campi Instagram nativi
+        r_ig = curl_requests.get(
             f"{self.BASE}/{self.user_id}",
-            params={
-                "fields": "id,name,account_type,username",
-                "access_token": self.access_token,
-            },
+            params={"fields": "id,username,name", "access_token": self.access_token},
             timeout=15,
         )
-        data = r.json()
+        data = r_ig.json()
+
         if "error" in data:
             err = data["error"]
             logger.error(
-                f"  [VERIFY] Token/ID non validi — "
-                f"code={err.get('code')} subcode={err.get('error_subcode')} "
-                f"msg='{err.get('message')}'"
+                f"  [VERIFY] Nodo non accessibile — "
+                f"code={err.get('code')} msg='{err.get('message')}'"
             )
             return False
-        # Maschera l'ID spezzandolo per evitare la censura di Actions
+
         raw_id = data.get("id", "")
         mid = len(raw_id) // 2
-        logger.info(
-            f"  [VERIFY] OK — id='{raw_id[:mid]}'+'{raw_id[mid:]}' "
-            f"username='{data.get('username', 'n/a')}' "
-            f"account_type='{data.get('account_type', 'n/a')}'"
+
+        # Se ha username è un nodo Instagram: tutto ok
+        if data.get("username"):
+            logger.info(
+                f"  [VERIFY] Nodo Instagram OK — "
+                f"id='{raw_id[:mid]}'+'{raw_id[mid:]}' "
+                f"username='{data.get('username')}'"
+            )
+            return True
+
+        # Step 2: sembra un nodo Facebook, cerca l'IG account collegato
+        logger.warning(
+            f"  [VERIFY] id='{raw_id[:mid]}'+'{raw_id[mid:]}' NON è un nodo Instagram "
+            f"(manca 'username'). Probabilmente è un Facebook Page ID. "
+            f"Cerco Instagram Business Account collegato..."
         )
-        if data.get("account_type") == "PERSONAL":
-            logger.error("  [VERIFY] account_type=PERSONAL: serve un account Business/Creator")
-            return False
-        return True
+
+        r_page = curl_requests.get(
+            f"{self.BASE}/{self.user_id}",
+            params={"fields": "id,name,instagram_business_account", "access_token": self.access_token},
+            timeout=15,
+        )
+        page_data = r_page.json()
+        ig_id = page_data.get("instagram_business_account", {}).get("id", "")
+
+        if ig_id:
+            mid2 = len(ig_id) // 2
+            logger.error(
+                f"  [VERIFY] IG_USER_ID è un Facebook Page ID. "
+                f"Il corretto Instagram Business Account ID è: "
+                f"'{ig_id[:mid2]}' + '{ig_id[mid2:]}'. "
+                f"Aggiorna il secret IG_USER_ID con questo valore."
+            )
+        else:
+            logger.error(
+                f"  [VERIFY] Nodo Facebook '{page_data.get('name', 'n/a')}' "
+                f"non ha un Instagram Business Account collegato, "
+                f"oppure il token manca del permesso 'pages_read_engagement'."
+            )
+        return False
 
     def publish_photo(self, image_path: str, caption: str) -> Optional[str]:
         if not self.enabled:
