@@ -1,50 +1,14 @@
 {
   "team": "AS Roma",
-  "last_updated": "2026-04-20T22:43:01.295957",
+  "last_updated": "",
   "current_season": {
-    "season": "2025/26",
-    "games": 1,
-    "wins": 0,
-    "draws": 1,
-    "losses": 0,
-    "goals_for": 1,
-    "goals_against": 1,
-    "points": 1,
-    "xg_total": 1.07,
-    "xga_total": 0.68,
-    "ppg": 1.0,
-    "xg_per_game": 1.07,
-    "xga_per_game": 0.68
+    "season": "2024/25", "games": 0, "wins": 0, "draws": 0, "losses": 0,
+    "goals_for": 0, "goals_against": 0, "points": 0,
+    "xg_total": 0.0, "xga_total": 0.0, "ppg": 0.0,
+    "xg_per_game": 0.0, "xga_per_game": 0.0
   },
   "season_summary": {},
-  "matches": [
-    {
-      "match_id": "13980102",
-      "date": "18/04/2026",
-      "opponent": "Atalanta",
-      "is_home": true,
-      "competition": "Serie A",
-      "roma_score": 1,
-      "opp_score": 1,
-      "result": "D",
-      "xg_roma": 1.07,
-      "xg_opp": 0.68,
-      "possession": 53.0,
-      "shots": 19.0,
-      "shots_opp": 8.0,
-      "season": "2025/26"
-    }
-  ],
-  "records": {
-    "most_points_season": 0,
-    "most_xg_season": 0,
-    "consecutive_wins": 0,
-    "consecutive_unbeaten": 1
-  },
-  "streaks": {
-    "current_wins": 0,
-    "current_draws": 1,
-    "current_losses": 0,
-    "current_unbeaten": 1
-  }
+  "matches": [],
+  "records": {"most_points_season": 0, "consecutive_wins": 0, "consecutive_unbeaten": 0},
+  "streaks": {"current_wins": 0, "current_draws": 0, "current_losses": 0, "current_unbeaten": 0}
 }
