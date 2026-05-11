@@ -1,25 +1,12 @@
-# ASRomaData Bot — Dependencies
-# Tutte le dipendenze sono gratuite e open-source
-
-# HTTP & scraping
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
-
-# Data manipulation
 pandas>=2.0.0
 numpy>=1.24.0
-
-# Visualization
 matplotlib>=3.7.0
 mplsoccer>=1.2.0
-
-# Social publishing
 tweepy>=4.14.0
 atproto>=0.0.46
-
-# Utilities
 python-dateutil>=2.8.0
 pillow>=10.0.0
-python-dotenv>=1.0.0   # carica .env in sviluppo locale (opzionale in produzione)
-curl_cffi>=0.5.10
+python-dotenv>=1.0.0
